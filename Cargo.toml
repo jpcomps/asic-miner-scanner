@@ -1,0 +1,19 @@
+[package]
+name = "asic-miner-scanner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.32"
+egui = "0.32"
+egui_extras = { version = "0.32", features = ["default"] }
+egui_plot = "0.33"
+asic-rs = "0.1"
+tokio = { version = "1.47", features = ["full"] }
+ipnetwork = "0.21"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+webbrowser = "1.0"
+
+[profile.release]
+opt-level = 2
