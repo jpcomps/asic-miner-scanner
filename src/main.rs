@@ -103,6 +103,7 @@ struct MinerScannerApp {
     detail_view_miners: Vec<MinerInfo>, // Miners being viewed in detail modals
     detail_refresh_times: HashMap<String, Instant>, // IP -> last refresh time
     detail_metrics_history: HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>, // IP -> Vec<(timestamp, total_hashrate, power, board_hashrates, avg_temp, board_temps)>
+    search_query: String, // Search filter for miners table
 }
 
 impl MinerScannerApp {
@@ -133,6 +134,7 @@ impl MinerScannerApp {
             detail_view_miners: Vec::new(),
             detail_refresh_times: HashMap::new(),
             detail_metrics_history: HashMap::new(),
+            search_query: String::new(),
         }
     }
 
@@ -233,7 +235,9 @@ impl MinerScannerApp {
                     range[last_dot_pos + 1..dash_pos].parse::<u8>(),
                     range[dash_pos + 1..].parse::<u8>(),
                 ) {
-                    return (end - start + 1) as usize;
+                    if end >= start {
+                        return (end as usize) - (start as usize) + 1;
+                    }
                 }
             }
         }
@@ -315,6 +319,8 @@ impl MinerScannerApp {
                 for range in ranges {
                     match MinerFactory::new()
                         .with_adaptive_concurrency()
+                        .with_identification_timeout_secs(5)
+                        .with_connectivity_retries(2)
                         .with_port_check(true)
                         .scan_by_range(&range)
                         .await
@@ -853,7 +859,11 @@ impl MinerScannerApp {
             let current_miner = miners_list.iter().find(|m| m.ip == detail_miner.ip);
 
             if let Some(miner) = current_miner {
-                egui::Window::new(format!("🔍 Miner Details - {} - {}", miner.ip, miner.model))
+                egui::Window::new(
+                    egui::RichText::new(format!("🔍 Miner Details - {} - {}", miner.ip, miner.model))
+                        .size(12.0)
+                        .monospace()
+                )
                     .id(egui::Id::new(format!("detail_modal_{}", miner.ip)))
                     .default_width(1200.0)
                     .default_height(700.0)
@@ -861,13 +871,14 @@ impl MinerScannerApp {
                     .collapsible(true)
                     .open(&mut is_open)
                     .show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                        // Left column - Basic Information (1/3 width)
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width() * 0.33, 700.0),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            // Left column - Basic Information (1/3 width)
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width() * 0.33);
+                                egui::ScrollArea::vertical()
+                                    .id_salt(format!("left_scroll_{}", miner.ip))
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
                                     if let Some(data) = &miner.full_data {
                             ui.heading("Basic Information");
                             ui.separator();
@@ -1041,11 +1052,12 @@ impl MinerScannerApp {
                             });
                         });
 
-                        ui.add_space(10.0);
-
-                        // Right column - Controls and Graphs (2/3 width)
-                        ui.vertical(|ui| {
-                            egui::ScrollArea::vertical().show(ui, |ui| {
+                            // Right column - Controls and Graphs (2/3 width)
+                            ui.vertical(|ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(format!("right_scroll_{}", miner.ip))
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
                                 // Auto-refresh indicator and manual refresh button
                                 let last_refresh_time = self.detail_refresh_times.get(&miner.ip).cloned();
                                 let should_auto_refresh = if let Some(last_time) = last_refresh_time {
@@ -1244,18 +1256,31 @@ impl MinerScannerApp {
                                     .fill(Color32::from_rgb(255, 165, 0))
                                 ).clicked() {
                                     let ip = miner.ip.clone();
+                                    let current_state = miner.light_flashing;
+                                    let miners = Arc::clone(&self.miners);
                                     std::thread::spawn(move || {
                                         let rt = tokio::runtime::Runtime::new().unwrap();
                                         rt.block_on(async move {
                                             let factory = MinerFactory::new();
-                                            if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
-                                                match miner.set_fault_light(true).await {
-                                                    Ok(_) => println!("✓ Set fault light on: {ip}"),
+                                            if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
+                                                let new_state = !current_state;
+                                                match miner_obj.set_fault_light(new_state).await {
+                                                    Ok(_) => {
+                                                        println!("✓ Set fault light to {}: {ip}", if new_state { "ON" } else { "OFF" });
+                                                        // Refresh miner data immediately
+                                                        let data = miner_obj.get_data().await;
+                                                        let mut miners_list = miners.lock().unwrap();
+                                                        if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
+                                                            existing.full_data = Some(data);
+                                                        }
+                                                    },
                                                     Err(e) => eprintln!("✗ Failed to set fault light on {ip}: {e}"),
                                                 }
                                             }
                                         });
                                     });
+                                    // Force immediate refresh in UI
+                                    self.detail_refresh_times.insert(miner.ip.clone(), Instant::now());
                                 }
                                 });
                                 // Get historical data for this miner
@@ -1438,13 +1463,12 @@ impl MinerScannerApp {
                                     } else {
                                         ui.label("Collecting data...");
                                     }
-                                    ui.add_space(900.0);
 
                                 }
 
                             });
                         });
-                    });
+                        });
                     });
             }
 
@@ -1542,8 +1566,25 @@ impl MinerScannerApp {
         let sort_direction = self.sort_direction;
         let mut clicked_column: Option<SortColumn> = None;
 
+        // Filter miners based on search query
+        let filtered_miners: Vec<&MinerInfo> = if self.search_query.is_empty() {
+            miners.iter().collect()
+        } else {
+            let query = self.search_query.to_lowercase();
+            miners
+                .iter()
+                .filter(|m| {
+                    m.ip.to_lowercase().contains(&query)
+                        || m.hostname.to_lowercase().contains(&query)
+                        || m.model.to_lowercase().contains(&query)
+                        || m.firmware_version.to_lowercase().contains(&query)
+                        || m.pool.to_lowercase().contains(&query)
+                })
+                .collect()
+        };
+
         // Bulk actions bar
-        if !miners.is_empty() {
+        if !filtered_miners.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("Selected: {}", self.selected_miners.len()))
@@ -1639,21 +1680,33 @@ impl MinerScannerApp {
 
                 if ui
                     .add_enabled(!self.selected_miners.is_empty(), fault_light_btn)
-                    .on_hover_text("Set fault light on selected miners")
+                    .on_hover_text("Toggle fault light on selected miners")
                     .clicked()
                 {
                     let selected_ips = self.selected_miners.clone();
+                    // Collect current states of selected miners
+                    let states: HashMap<String, bool> = filtered_miners
+                        .iter()
+                        .filter(|m| selected_ips.contains(&m.ip))
+                        .map(|m| (m.ip.clone(), m.light_flashing))
+                        .collect();
+
                     std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         for ip in selected_ips {
                             let ip_clone = ip.clone();
+                            let current_state = states.get(&ip).copied().unwrap_or(false);
                             rt.block_on(async move {
                                 let factory = MinerFactory::new();
                                 if let Ok(Some(miner)) =
                                     factory.get_miner(ip_clone.parse().unwrap()).await
                                 {
-                                    match miner.set_fault_light(true).await {
-                                        Ok(_) => println!("✓ Set fault light on: {ip_clone}"),
+                                    let new_state = !current_state;
+                                    match miner.set_fault_light(new_state).await {
+                                        Ok(_) => println!(
+                                            "✓ Set fault light to {} on: {ip_clone}",
+                                            if new_state { "ON" } else { "OFF" }
+                                        ),
                                         Err(e) => eprintln!(
                                             "✗ Failed to set fault light on {ip_clone}: {e}"
                                         ),
@@ -1667,11 +1720,33 @@ impl MinerScannerApp {
                 ui.add_space(10.0);
 
                 if ui.button("Select All").clicked() {
-                    self.selected_miners = miners.iter().map(|m| m.ip.clone()).collect();
+                    self.selected_miners = filtered_miners.iter().map(|m| m.ip.clone()).collect();
                 }
 
                 if ui.button("Deselect All").clicked() {
                     self.selected_miners.clear();
+                }
+            });
+
+            ui.add_space(10.0);
+
+            // Search bar
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("🔍 SEARCH:")
+                        .size(11.0)
+                        .color(Color32::from_rgb(160, 160, 160))
+                        .monospace(),
+                );
+                ui.add_space(5.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search_query)
+                        .hint_text("Filter by IP, hostname, model...")
+                        .desired_width(300.0)
+                        .font(FontId::monospace(11.0)),
+                );
+                if ui.button("✕").clicked() {
+                    self.search_query.clear();
                 }
             });
 
@@ -1705,8 +1780,17 @@ impl MinerScannerApp {
                 .inner_margin(20.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        let display_text = if self.search_query.is_empty() {
+                            format!("⛏ DISCOVERED MINERS ({})", miners.len())
+                        } else {
+                            format!(
+                                "⛏ DISCOVERED MINERS ({}/{})",
+                                filtered_miners.len(),
+                                miners.len()
+                            )
+                        };
                         ui.label(
-                            egui::RichText::new(format!("⛏ DISCOVERED MINERS ({})", miners.len()))
+                            egui::RichText::new(display_text)
                                 .size(13.0)
                                 .color(Color32::from_rgb(240, 240, 240))
                                 .monospace(),
@@ -1945,7 +2029,7 @@ impl MinerScannerApp {
                                     });
                                 })
                                 .body(|mut body| {
-                                    for miner in miners.iter() {
+                                    for miner in filtered_miners.iter() {
                                         let is_selected = self.selected_miners.contains(&miner.ip);
                                         body.row(35.0, |mut row| {
                                             // Checkbox column
@@ -2003,7 +2087,7 @@ impl MinerScannerApp {
                                                             .any(|m| m.ip == miner.ip)
                                                         {
                                                             self.detail_view_miners
-                                                                .push(miner.clone());
+                                                                .push((*miner).clone());
                                                         }
                                                     }
                                                 });
