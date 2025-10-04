@@ -18,9 +18,7 @@ pub fn parse_ip_range(start: &str, end: &str) -> Result<String, String> {
         || start_parts[1] != end_parts[1]
         || start_parts[2] != end_parts[2]
     {
-        return Err(
-            "IP ranges must be in the same subnet (first 3 octets must match)".to_string(),
-        );
+        return Err("IP ranges must be in the same subnet (first 3 octets must match)".to_string());
     }
 
     let start_last: u8 = start_parts[3]
@@ -75,7 +73,7 @@ pub fn scan_ranges(
             for range in ranges {
                 match MinerFactory::new()
                     .with_adaptive_concurrency()
-                    .with_identification_timeout_secs(5)
+                    .with_identification_timeout_secs(2)
                     .with_connectivity_retries(2)
                     .with_port_check(true)
                     .scan_by_range(&range)
@@ -181,9 +179,8 @@ pub fn scan_ranges(
                                             .as_secs_f64();
 
                                         let mut history_map = hashrate_history.lock().unwrap();
-                                        let history = history_map
-                                            .entry(miner_info.ip.clone())
-                                            .or_default();
+                                        let history =
+                                            history_map.entry(miner_info.ip.clone()).or_default();
                                         history.push(HashratePoint {
                                             timestamp,
                                             hashrate,
