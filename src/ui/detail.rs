@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_miner_detail_modal(
     ctx: &egui::Context,
     detail_view_miners: &mut Vec<MinerInfo>,
@@ -316,6 +317,7 @@ fn draw_hashboards_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerDat
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_controls_and_graphs(
     ui: &mut egui::Ui,
     miner: &MinerInfo,
