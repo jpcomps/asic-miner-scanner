@@ -141,7 +141,7 @@ pub fn scan_ranges(
                                         } else {
                                             value_str
                                         }
-                                    },
+                                    }
                                     None => "N/A".to_string(),
                                 },
                                 wattage: wattage_str,
@@ -166,7 +166,8 @@ pub fn scan_ranges(
                                             .collect();
 
                                         if !rpms.is_empty() {
-                                            let avg_rpm = rpms.iter().sum::<f64>() / rpms.len() as f64;
+                                            let avg_rpm =
+                                                rpms.iter().sum::<f64>() / rpms.len() as f64;
                                             format!("{avg_rpm:.0} RPM")
                                         } else {
                                             "N/A".to_string()

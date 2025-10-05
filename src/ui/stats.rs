@@ -181,7 +181,8 @@ pub fn draw_stats_card(
     // Fleet Hashrate History Plot
     if !fleet_hashrate_history.is_empty() {
         // Request faster repaints for smoother plot updates
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
 
         egui::Frame::new()
             .fill(Color32::from_rgb(28, 28, 28))

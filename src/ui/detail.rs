@@ -785,7 +785,8 @@ fn draw_metrics_graphs(
         use egui_plot::{Legend, Line, Plot, PlotPoints};
 
         // Request faster repaints for smoother plot updates
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
 
         ui.heading("Metrics Over Time");
         ui.separator();
@@ -926,7 +927,8 @@ fn draw_metrics_graphs(
                                 .collect();
 
                             if !board_temp_points_raw.is_empty() {
-                                let board_temp_points = interpolate_points(&board_temp_points_raw, 4);
+                                let board_temp_points =
+                                    interpolate_points(&board_temp_points_raw, 4);
                                 plot_ui.line(
                                     Line::new(
                                         format!("Board {board_idx}"),
