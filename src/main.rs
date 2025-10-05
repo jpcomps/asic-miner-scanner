@@ -38,6 +38,7 @@ struct MinerScannerApp {
     selected_miners: HashSet<String>,
     detail_view_miners: Vec<MinerInfo>,
     detail_refresh_times: HashMap<String, Instant>,
+    detail_graph_update_times: HashMap<String, Instant>, // For 200ms rolling graph updates
     detail_metrics_history: HashMap<String, MetricsHistory>,
     search_query: String,
     scan_control_state: ScanControlState,
@@ -77,6 +78,7 @@ impl MinerScannerApp {
             selected_miners: HashSet::new(),
             detail_view_miners: Vec::new(),
             detail_refresh_times: HashMap::new(),
+            detail_graph_update_times: HashMap::new(),
             detail_metrics_history: HashMap::new(),
             search_query: String::new(),
             scan_control_state: ScanControlState {
@@ -304,32 +306,38 @@ impl eframe::App for MinerScannerApp {
             }
         }
 
-        // Update fleet hashrate history periodically (every 1 seconds)
+        // Update fleet hashrate history periodically (every ~33ms for 30fps rolling effect)
         let should_update_fleet = if let Some(last_update) = self.last_fleet_update {
-            last_update.elapsed().as_secs() >= 10
+            last_update.elapsed().as_millis() >= 33
         } else {
             true
         };
 
         if should_update_fleet {
             let miners = self.miners.lock().unwrap();
-            let total_hashrate: f64 = miners
-                .iter()
-                .filter_map(|m| m.hashrate.split_whitespace().next()?.parse::<f64>().ok())
-                .sum();
-            drop(miners);
 
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64();
+            // Only record if there are miners
+            if !miners.is_empty() {
+                let total_hashrate: f64 = miners
+                    .iter()
+                    .filter_map(|m| m.hashrate.split_whitespace().next()?.parse::<f64>().ok())
+                    .sum();
+                drop(miners);
 
-            self.fleet_hashrate_history
-                .push((timestamp, total_hashrate));
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
 
-            // Keep only last 288 points (24 hours at 5-min intervals, but we're doing 10s so ~48 hours)
-            if self.fleet_hashrate_history.len() > 288 {
-                self.fleet_hashrate_history.remove(0);
+                self.fleet_hashrate_history
+                    .push((timestamp, total_hashrate));
+
+                // Keep only last 9000 points (~5 minutes at 30fps for smooth rolling)
+                if self.fleet_hashrate_history.len() > 9000 {
+                    self.fleet_hashrate_history.remove(0);
+                }
+            } else {
+                drop(miners);
             }
 
             self.last_fleet_update = Some(Instant::now());
@@ -341,6 +349,7 @@ impl eframe::App for MinerScannerApp {
             &mut self.detail_view_miners,
             Arc::clone(&self.miners),
             &mut self.detail_refresh_times,
+            &mut self.detail_graph_update_times,
             &mut self.detail_metrics_history,
             &mut self.recording_states,
             &mut self.detail_refresh_interval_secs,

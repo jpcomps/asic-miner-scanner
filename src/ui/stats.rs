@@ -3,38 +3,6 @@ use eframe::egui;
 use egui::Color32;
 use egui_plot::{Line, Plot, PlotPoints};
 
-// Linear interpolation between data points for smoother visualization
-fn interpolate_points(points: &[(f64, f64)], points_per_interval: usize) -> Vec<[f64; 2]> {
-    if points.len() < 2 {
-        return points.iter().map(|(x, y)| [*x, *y]).collect();
-    }
-
-    let mut interpolated = Vec::new();
-
-    for i in 0..points.len() - 1 {
-        let (x1, y1) = points[i];
-        let (x2, y2) = points[i + 1];
-
-        // Add the starting point
-        interpolated.push([x1, y1]);
-
-        // Add interpolated points between this and next
-        for j in 1..points_per_interval {
-            let t = j as f64 / points_per_interval as f64;
-            let x = x1 + t * (x2 - x1);
-            let y = y1 + t * (y2 - y1);
-            interpolated.push([x, y]);
-        }
-    }
-
-    // Add the final point
-    if let Some(&(x, y)) = points.last() {
-        interpolated.push([x, y]);
-    }
-
-    interpolated
-}
-
 pub fn draw_stats_card(
     ui: &mut egui::Ui,
     miners: &[MinerInfo],
@@ -180,9 +148,8 @@ pub fn draw_stats_card(
 
     // Fleet Hashrate History Plot
     if !fleet_hashrate_history.is_empty() {
-        // Request faster repaints for smoother plot updates
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
+        // Request continuous repaints for smooth 60fps animation
+        ui.ctx().request_repaint();
 
         egui::Frame::new()
             .fill(Color32::from_rgb(28, 28, 28))
@@ -210,23 +177,20 @@ pub fn draw_stats_card(
 
                 ui.add_space(5.0);
 
-                // Convert to (timestamp, hashrate) tuples and apply interpolation
-                let raw_points: Vec<(f64, f64)> = fleet_hashrate_history
+                // Convert to plot points (no interpolation needed at 30fps)
+                let points: Vec<[f64; 2]> = fleet_hashrate_history
                     .iter()
-                    .map(|(ts, hr)| (*ts, hr / divisor))
+                    .map(|(ts, hr)| [*ts, hr / divisor])
                     .collect();
 
-                // Interpolate with 4 points between each actual data point for smoothness
-                let points = interpolate_points(&raw_points, 4);
-
-                // Calculate y-axis range with some padding for better visibility
+                // Calculate y-axis range with interval-based scaling
                 let min_hashrate = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
                 let max_hashrate = points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
 
-                // Add 10% padding on top and bottom
-                let range = max_hashrate - min_hashrate;
-                let y_min = (min_hashrate - range * 0.05).max(0.0);
-                let y_max = max_hashrate + range * 0.05;
+                // Round to nearest 100 TH (or 0.1 PH) intervals
+                let interval = if use_ph { 0.1 } else { 100.0 };
+                let y_min = (min_hashrate / interval).floor() * interval;
+                let y_max = ((max_hashrate / interval).ceil() + 1.0) * interval;
 
                 Plot::new("fleet_hashrate_plot")
                     .height(150.0)
@@ -234,7 +198,7 @@ pub fn draw_stats_card(
                     .allow_scroll(false)
                     .include_y(y_min)
                     .include_y(y_max)
-                    .show_axes([false, true])
+                    .show_axes([true, true])
                     .x_axis_formatter(|val, _range| {
                         use chrono::{Local, TimeZone};
                         if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
@@ -243,6 +207,7 @@ pub fn draw_stats_card(
                             String::new()
                         }
                     })
+                    .y_axis_formatter(move |val, _range| format!("{:.1}", val.value))
                     .show(ui, |plot_ui| {
                         plot_ui.line(
                             Line::new("Fleet Hashrate", PlotPoints::from(points))
