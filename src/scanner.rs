@@ -73,7 +73,7 @@ pub fn scan_ranges(
             for range in ranges {
                 match MinerFactory::new()
                     .with_adaptive_concurrency()
-                    .with_identification_timeout_secs(2)
+                    .with_identification_timeout_secs(5)
                     .with_connectivity_retries(2)
                     .with_port_check(true)
                     .scan_by_range(&range)

@@ -114,13 +114,7 @@ pub fn draw_scan_and_ranges_card(
 
                 ui.add_space(10.0);
 
-                // Always show scan progress bar
-                let _progress_fraction = if is_scanning && total_ips > 0 {
-                    scanned_ips as f32 / total_ips as f32
-                } else {
-                    0.0
-                };
-
+                // Status text
                 let status_text = if is_scanning {
                     format!("⏳ Scanning: {scanned_ips}/{total_ips}")
                 } else {

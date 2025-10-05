@@ -9,7 +9,7 @@ use egui::Color32;
 use models::{MetricsHistory, MinerInfo, SavedRange, ScanProgress, SortColumn, SortDirection};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ui::ScanControlState;
 
 fn main() -> Result<(), eframe::Error> {
@@ -43,11 +43,15 @@ struct MinerScannerApp {
     scan_control_state: ScanControlState,
     recording_states: HashMap<String, models::RecordingState>, // IP -> RecordingState
     detail_refresh_interval_secs: u64,                         // Refresh interval for detail modal
+    prev_detail_refresh_interval_secs: u64,                    // Previous value to detect changes
+    prev_auto_scan_interval_secs: u64,                         // Previous value to detect changes
+    fleet_hashrate_history: Vec<(f64, f64)>,                   // (timestamp, total_hashrate)
+    last_fleet_update: Option<Instant>,
 }
 
 impl MinerScannerApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let saved_ranges = config::load_config();
+        let app_config = config::load_config();
 
         Self {
             miners: Arc::new(Mutex::new(Vec::new())),
@@ -61,7 +65,7 @@ impl MinerScannerApp {
             error_message: String::new(),
             sort_column: None,
             sort_direction: SortDirection::Ascending,
-            saved_ranges,
+            saved_ranges: app_config.saved_ranges,
             hashrate_history: Arc::new(Mutex::new(HashMap::new())),
             selected_miners: HashSet::new(),
             detail_view_miners: Vec::new(),
@@ -73,11 +77,15 @@ impl MinerScannerApp {
                 ip_range_end: "10.0.81.255".to_string(),
                 new_range_name: String::new(),
                 auto_scan_enabled: true,
-                auto_scan_interval_secs: 120,
+                auto_scan_interval_secs: app_config.auto_scan_interval_secs,
                 last_scan_time: None,
             },
             recording_states: HashMap::new(),
-            detail_refresh_interval_secs: 10,
+            detail_refresh_interval_secs: app_config.detail_refresh_interval_secs,
+            prev_detail_refresh_interval_secs: app_config.detail_refresh_interval_secs,
+            prev_auto_scan_interval_secs: app_config.auto_scan_interval_secs,
+            fleet_hashrate_history: Vec::new(),
+            last_fleet_update: None,
         }
     }
 
@@ -118,6 +126,15 @@ impl MinerScannerApp {
         });
     }
 
+    fn save_config(&self) {
+        let app_config = config::AppConfig {
+            saved_ranges: self.saved_ranges.clone(),
+            detail_refresh_interval_secs: self.detail_refresh_interval_secs,
+            auto_scan_interval_secs: self.scan_control_state.auto_scan_interval_secs,
+        };
+        config::save_config(&app_config);
+    }
+
     fn add_saved_range(&mut self) {
         if !self.scan_control_state.new_range_name.trim().is_empty() {
             let range = match scanner::parse_ip_range(
@@ -136,14 +153,14 @@ impl MinerScannerApp {
                 range,
             });
             self.scan_control_state.new_range_name.clear();
-            config::save_config(&self.saved_ranges);
+            self.save_config();
         }
     }
 
     fn remove_saved_range(&mut self, index: usize) {
         if index < self.saved_ranges.len() {
             self.saved_ranges.remove(index);
-            config::save_config(&self.saved_ranges);
+            self.save_config();
         }
     }
 
@@ -211,6 +228,37 @@ impl eframe::App for MinerScannerApp {
             }
         }
 
+        // Update fleet hashrate history periodically (every 1 seconds)
+        let should_update_fleet = if let Some(last_update) = self.last_fleet_update {
+            last_update.elapsed().as_secs() >= 10
+        } else {
+            true
+        };
+
+        if should_update_fleet {
+            let miners = self.miners.lock().unwrap();
+            let total_hashrate: f64 = miners
+                .iter()
+                .filter_map(|m| m.hashrate.split_whitespace().next()?.parse::<f64>().ok())
+                .sum();
+            drop(miners);
+
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+
+            self.fleet_hashrate_history
+                .push((timestamp, total_hashrate));
+
+            // Keep only last 288 points (24 hours at 5-min intervals, but we're doing 10s so ~48 hours)
+            if self.fleet_hashrate_history.len() > 288 {
+                self.fleet_hashrate_history.remove(0);
+            }
+
+            self.last_fleet_update = Some(Instant::now());
+        }
+
         // Show miner detail modal if one is selected
         ui::draw_miner_detail_modal(
             ctx,
@@ -221,6 +269,15 @@ impl eframe::App for MinerScannerApp {
             &mut self.recording_states,
             &mut self.detail_refresh_interval_secs,
         );
+
+        // Save config if refresh interval or auto scan interval changed
+        if self.detail_refresh_interval_secs != self.prev_detail_refresh_interval_secs
+            || self.scan_control_state.auto_scan_interval_secs != self.prev_auto_scan_interval_secs
+        {
+            self.prev_detail_refresh_interval_secs = self.detail_refresh_interval_secs;
+            self.prev_auto_scan_interval_secs = self.scan_control_state.auto_scan_interval_secs;
+            self.save_config();
+        }
 
         // Top bar
         egui::TopBottomPanel::top("top_bar")
@@ -291,10 +348,10 @@ impl eframe::App for MinerScannerApp {
                         // Fleet Overview (left column) - centered vertically
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width() / 2.0 - 7.5, row_height),
-                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            egui::Layout::top_down(egui::Align::Center),
                             |ui| {
                                 let miners = self.miners.lock().unwrap();
-                                ui::draw_stats_card(ui, &miners);
+                                ui::draw_stats_card(ui, &miners, &self.fleet_hashrate_history);
                             },
                         );
 
@@ -375,9 +432,9 @@ impl eframe::App for MinerScannerApp {
             if should_scan && !is_scanning {
                 self.scan_all_saved_ranges();
             }
-
-            // Request repaint to keep checking
-            ctx.request_repaint_after(Duration::from_secs(1));
         }
+
+        // Request repaint to keep fleet graph updating
+        ctx.request_repaint_after(Duration::from_secs(1));
     }
 }

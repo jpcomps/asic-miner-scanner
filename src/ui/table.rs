@@ -99,6 +99,23 @@ pub fn draw_miners_table(
     if !filtered_miners.is_empty() {
         ui.horizontal(|ui| {
             ui.label(
+                egui::RichText::new("🔍 SEARCH:")
+                    .size(11.0)
+                    .color(Color32::from_rgb(160, 160, 160))
+                    .monospace(),
+            );
+            ui.add_space(5.0);
+            ui.add(
+                egui::TextEdit::singleline(search_query)
+                    .hint_text("Filter by IP, hostname, model...")
+                    .desired_width(300.0)
+                    .font(FontId::monospace(11.0)),
+            );
+            if ui.button("✕").clicked() {
+                search_query.clear();
+            }
+            ui.add_space(10.0);
+            ui.label(
                 egui::RichText::new(format!("Selected: {}", selected_miners.len()))
                     .size(11.0)
                     .color(Color32::from_rgb(160, 160, 160))
@@ -238,28 +255,10 @@ pub fn draw_miners_table(
             if ui.button("Deselect All").clicked() {
                 selected_miners.clear();
             }
-        });
+            //});
 
-        ui.add_space(10.0);
-
-        // Search bar
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("🔍 SEARCH:")
-                    .size(11.0)
-                    .color(Color32::from_rgb(160, 160, 160))
-                    .monospace(),
-            );
-            ui.add_space(5.0);
-            ui.add(
-                egui::TextEdit::singleline(search_query)
-                    .hint_text("Filter by IP, hostname, model...")
-                    .desired_width(300.0)
-                    .font(FontId::monospace(11.0)),
-            );
-            if ui.button("✕").clicked() {
-                search_query.clear();
-            }
+            // Search bar
+            //ui.horizontal(|ui| {
         });
 
         ui.add_space(10.0);

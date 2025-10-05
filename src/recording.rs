@@ -31,12 +31,35 @@ pub fn start_recording(miner: &MinerInfo) -> Result<RecordingState, std::io::Err
 
     let file_path = recordings_dir.join(filename);
 
-    // Create file and write header
+    // Determine number of boards and fans from miner data
+    let (num_boards, num_fans) = if let Some(data) = &miner.full_data {
+        (data.hashboards.len(), data.fans.len())
+    } else {
+        (0, 0)
+    };
+
+    // Create file and write dynamic header
     let mut file = File::create(&file_path)?;
-    writeln!(
-        file,
-        "Miner IP,MAC Address,Model,Firmware,Timestamp,Total Hashrate (TH/s),Power (W),Efficiency (W/TH),Avg Temperature (°C),Board 0 Hashrate,Board 1 Hashrate,Board 2 Hashrate,Board 3 Hashrate,Board 0 Temp,Board 1 Temp,Board 2 Temp,Board 3 Temp,Fan 1 RPM,Fan 2 RPM,Fan 3 RPM,Fan 4 RPM"
-    )?;
+
+    // Base header
+    let mut header = "Miner IP,MAC Address,Model,Firmware,Timestamp,Total Hashrate (TH/s),Power (W),Efficiency (W/TH),Avg Temperature (°C)".to_string();
+
+    // Add board hashrate columns
+    for i in 0..num_boards {
+        header.push_str(&format!(",Board {} Hashrate", i));
+    }
+
+    // Add board temperature columns
+    for i in 0..num_boards {
+        header.push_str(&format!(",Board {} Temp", i));
+    }
+
+    // Add fan RPM columns
+    for i in 1..=num_fans {
+        header.push_str(&format!(",Fan {} RPM", i));
+    }
+
+    writeln!(file, "{}", header)?;
 
     Ok(RecordingState {
         file_path: file_path.to_string_lossy().to_string(),
@@ -95,67 +118,82 @@ pub fn append_data_point(
         0.0
     };
 
-    // Extract per-board hashrates (up to 4 boards)
-    let mut board_hashrates = [0.0; 4];
-    for (i, board) in data.hashboards.iter().take(4).enumerate() {
-        if let Some(hr) = &board.hashrate {
-            let converted = hr
-                .clone()
-                .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
-            let display_str = format!("{converted}");
-            if let Some(val) = display_str
-                .split_whitespace()
-                .next()
-                .and_then(|s| s.parse::<f64>().ok())
-            {
-                board_hashrates[i] = val;
+    // Extract per-board hashrates (dynamic)
+    let board_hashrates: Vec<f64> = data
+        .hashboards
+        .iter()
+        .map(|board| {
+            if let Some(hr) = &board.hashrate {
+                let converted = hr
+                    .clone()
+                    .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
+                let display_str = format!("{converted}");
+                display_str
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            } else {
+                0.0
             }
-        }
-    }
+        })
+        .collect();
 
-    // Extract per-board temperatures (up to 4 boards)
-    let mut board_temps = [0.0; 4];
-    for (i, board) in data.hashboards.iter().take(4).enumerate() {
-        if let Some(temp) = board.board_temperature {
-            board_temps[i] = temp.as_celsius();
-        }
-    }
+    // Extract per-board temperatures (dynamic)
+    let board_temps: Vec<f64> = data
+        .hashboards
+        .iter()
+        .map(|board| {
+            board
+                .board_temperature
+                .map(|temp| temp.as_celsius())
+                .unwrap_or(0.0)
+        })
+        .collect();
 
-    // Extract fan speeds (up to 4 fans)
-    let mut fan_rpms = [0.0; 4];
-    for (i, fan) in data.fans.iter().take(4).enumerate() {
-        if let Some(rpm) = fan.rpm {
-            let rpm_value = rpm.as_radians_per_second() * 60.0 / (2.0 * std::f64::consts::PI);
-            fan_rpms[i] = rpm_value;
-        }
-    }
+    // Extract fan speeds (dynamic)
+    let fan_rpms: Vec<f64> = data
+        .fans
+        .iter()
+        .map(|fan| {
+            fan.rpm
+                .map(|rpm| rpm.as_radians_per_second() * 60.0 / (2.0 * std::f64::consts::PI))
+                .unwrap_or(0.0)
+        })
+        .collect();
 
-    // Write CSV row
-    writeln!(
-        file,
-        "{},{},{},{},{},{:.2},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{:.0},{:.0}",
+    // Build CSV row dynamically
+    let mut row = format!(
+        "{},{},{},{},{},{:.2},{:.0},{:.2},{:.2}",
         miner.ip,
-        data.mac.map(|m| m.to_string()).unwrap_or_else(|| "N/A".to_string()),
+        data.mac
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "N/A".to_string()),
         miner.model,
         miner.firmware_version,
         timestamp,
         total_hashrate,
         power,
         efficiency,
-        avg_temp,
-        board_hashrates[0],
-        board_hashrates[1],
-        board_hashrates[2],
-        board_hashrates[3],
-        board_temps[0],
-        board_temps[1],
-        board_temps[2],
-        board_temps[3],
-        fan_rpms[0],
-        fan_rpms[1],
-        fan_rpms[2],
-        fan_rpms[3],
-    )?;
+        avg_temp
+    );
+
+    // Add board hashrates
+    for hashrate in &board_hashrates {
+        row.push_str(&format!(",{:.2}", hashrate));
+    }
+
+    // Add board temperatures
+    for temp in &board_temps {
+        row.push_str(&format!(",{:.2}", temp));
+    }
+
+    // Add fan RPMs
+    for rpm in &fan_rpms {
+        row.push_str(&format!(",{:.0}", rpm));
+    }
+
+    writeln!(file, "{}", row)?;
 
     recording.row_count += 1;
     Ok(())

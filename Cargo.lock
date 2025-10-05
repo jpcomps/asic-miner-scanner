@@ -293,8 +293,7 @@ dependencies = [
 [[package]]
 name = "asic-rs"
 version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aff267cfa024b7d11bb4b253330e7cd2919573801509d76f3887f654bc7ed39"
+source = "git+https://github.com/256-Foundation/asic-rs#2d7e419ab02e105897dd671b557c2128591107a8"
 dependencies = [
  "aes",
  "anyhow",

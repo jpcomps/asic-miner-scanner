@@ -11,7 +11,8 @@ resvg = "0.45"
 usvg = "0.45"
 tiny-skia = "0.11"
 egui_plot = "0.33"
-asic-rs = "0.1"
+#asic-rs = "0.1"
+asic-rs = { git = "https://github.com/256-Foundation/asic-rs" }
 tokio = { version = "1.47", features = ["full"] }
 ipnetwork = "0.21"
 serde = { version = "1.0", features = ["derive"] }
