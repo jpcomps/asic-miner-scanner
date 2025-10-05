@@ -109,7 +109,6 @@ pub fn draw_stats_card(
                 } else {
                     (total_hashrate, "TH/s")
                 };
-                
                 // Total wattage
                 let (wattage_format, wattage_unit) = if total_wattage >= 10000.0 {
                     (format!("{:.2}", total_wattage / 1000.0), "kW")
