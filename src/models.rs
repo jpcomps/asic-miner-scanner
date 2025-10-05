@@ -14,6 +14,7 @@ pub struct MinerInfo {
     pub temperature: String,
     pub fan_speed: String,
     pub pool: String,
+    pub worker: String,
     pub light_flashing: bool,         // Fault light status
     pub full_data: Option<MinerData>, // Store complete MinerData for detail view
 }
@@ -56,6 +57,7 @@ pub enum SortColumn {
     Temperature,
     FanSpeed,
     Pool,
+    Worker,
 }
 
 #[derive(Clone, Copy, PartialEq)]

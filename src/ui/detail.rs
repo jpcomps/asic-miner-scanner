@@ -6,6 +6,38 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+// Linear interpolation between data points for smoother visualization
+fn interpolate_points(points: &[[f64; 2]], points_per_interval: usize) -> Vec<[f64; 2]> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+
+    let mut interpolated = Vec::new();
+
+    for i in 0..points.len() - 1 {
+        let [x1, y1] = points[i];
+        let [x2, y2] = points[i + 1];
+
+        // Add the starting point
+        interpolated.push([x1, y1]);
+
+        // Add interpolated points between this and next
+        for j in 1..points_per_interval {
+            let t = j as f64 / points_per_interval as f64;
+            let x = x1 + t * (x2 - x1);
+            let y = y1 + t * (y2 - y1);
+            interpolated.push([x, y]);
+        }
+    }
+
+    // Add the final point
+    if let Some(&point) = points.last() {
+        interpolated.push(point);
+    }
+
+    interpolated
+}
+
 pub fn draw_miner_detail_modal(
     ctx: &egui::Context,
     detail_view_miners: &mut Vec<MinerInfo>,
@@ -752,6 +784,9 @@ fn draw_metrics_graphs(
     if let Some(history_data) = history {
         use egui_plot::{Legend, Line, Plot, PlotPoints};
 
+        // Request faster repaints for smoother plot updates
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+
         ui.heading("Metrics Over Time");
         ui.separator();
         ui.add_space(5.0);
@@ -768,10 +803,12 @@ fn draw_metrics_graphs(
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Hashrate").strong());
 
-                let total_hashrate_points: Vec<[f64; 2]> = history_data
+                let total_hashrate_points_raw: Vec<[f64; 2]> = history_data
                     .iter()
                     .map(|(ts, hr, _, _, _, _)| [*ts, *hr])
                     .collect();
+
+                let total_hashrate_points = interpolate_points(&total_hashrate_points_raw, 4);
 
                 let max_hashrate = total_hashrate_points
                     .iter()
@@ -809,14 +846,15 @@ fn draw_metrics_graphs(
                         ];
 
                         for board_idx in 0..num_boards {
-                            let board_points: Vec<[f64; 2]> = history_data
+                            let board_points_raw: Vec<[f64; 2]> = history_data
                                 .iter()
                                 .filter_map(|(ts, _, _, boards, _, _)| {
                                     boards.get(board_idx).map(|hr| [*ts, *hr])
                                 })
                                 .collect();
 
-                            if !board_points.is_empty() {
+                            if !board_points_raw.is_empty() {
+                                let board_points = interpolate_points(&board_points_raw, 4);
                                 plot_ui.line(
                                     Line::new(
                                         format!("Board {board_idx}"),
@@ -840,10 +878,12 @@ fn draw_metrics_graphs(
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Temperature").strong());
 
-                let avg_temp_points: Vec<[f64; 2]> = history_data
+                let avg_temp_points_raw: Vec<[f64; 2]> = history_data
                     .iter()
                     .map(|(ts, _, _, _, avg_t, _)| [*ts, *avg_t])
                     .collect();
+
+                let avg_temp_points = interpolate_points(&avg_temp_points_raw, 4);
 
                 let max_temp = avg_temp_points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
 
@@ -878,14 +918,15 @@ fn draw_metrics_graphs(
                         ];
 
                         for board_idx in 0..num_boards {
-                            let board_temp_points: Vec<[f64; 2]> = history_data
+                            let board_temp_points_raw: Vec<[f64; 2]> = history_data
                                 .iter()
                                 .filter_map(|(ts, _, _, _, _, temps)| {
                                     temps.get(board_idx).map(|t| [*ts, *t])
                                 })
                                 .collect();
 
-                            if !board_temp_points.is_empty() {
+                            if !board_temp_points_raw.is_empty() {
+                                let board_temp_points = interpolate_points(&board_temp_points_raw, 4);
                                 plot_ui.line(
                                     Line::new(
                                         format!("Board {board_idx}"),
@@ -909,7 +950,7 @@ fn draw_metrics_graphs(
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Efficiency (W/TH)").strong());
 
-                let efficiency_points: Vec<[f64; 2]> = history_data
+                let efficiency_points_raw: Vec<[f64; 2]> = history_data
                     .iter()
                     .filter_map(|(ts, hr, pw, _, _, _)| {
                         if *hr > 0.0 {
@@ -920,7 +961,9 @@ fn draw_metrics_graphs(
                     })
                     .collect();
 
-                if !efficiency_points.is_empty() {
+                if !efficiency_points_raw.is_empty() {
+                    let efficiency_points = interpolate_points(&efficiency_points_raw, 4);
+
                     let max_efficiency = efficiency_points
                         .iter()
                         .map(|p| p[1])
@@ -967,10 +1010,12 @@ fn draw_metrics_graphs(
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Power").strong());
 
-                let power_points: Vec<[f64; 2]> = history_data
+                let power_points_raw: Vec<[f64; 2]> = history_data
                     .iter()
                     .map(|(ts, _, pw, _, _, _)| [*ts, *pw])
                     .collect();
+
+                let power_points = interpolate_points(&power_points_raw, 4);
 
                 let max_power = power_points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
 

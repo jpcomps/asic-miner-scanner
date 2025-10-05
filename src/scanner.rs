@@ -130,7 +130,18 @@ pub fn scan_ranges(
                                     .map(|cb| format!("{cb:?}"))
                                     .unwrap_or_else(|| "N/A".to_string()),
                                 hashrate: match hashrate_th {
-                                    Some(hr) => format!("{hr:.2}"),
+                                    Some(hr) => {
+                                        let value_str = format!("{hr}");
+                                        if let Some(val) = value_str.split_whitespace().next() {
+                                            if let Ok(num) = val.parse::<f64>() {
+                                                format!("{:.2}", num)
+                                            } else {
+                                                value_str
+                                            }
+                                        } else {
+                                            value_str
+                                        }
+                                    },
                                     None => "N/A".to_string(),
                                 },
                                 wattage: wattage_str,
@@ -144,10 +155,19 @@ pub fn scan_ranges(
                                 },
                                 fan_speed: {
                                     if !data.fans.is_empty() {
-                                        if let Some(rpm) = data.fans[0].rpm {
-                                            let rpm_value = rpm.as_radians_per_second() * 60.0
-                                                / (2.0 * std::f64::consts::PI);
-                                            format!("{rpm_value:.0} RPM")
+                                        let rpms: Vec<f64> = data
+                                            .fans
+                                            .iter()
+                                            .filter_map(|fan| fan.rpm)
+                                            .map(|rpm| {
+                                                rpm.as_radians_per_second() * 60.0
+                                                    / (2.0 * std::f64::consts::PI)
+                                            })
+                                            .collect();
+
+                                        if !rpms.is_empty() {
+                                            let avg_rpm = rpms.iter().sum::<f64>() / rpms.len() as f64;
+                                            format!("{avg_rpm:.0} RPM")
                                         } else {
                                             "N/A".to_string()
                                         }
@@ -159,6 +179,17 @@ pub fn scan_ranges(
                                     if !data.pools.is_empty() {
                                         if let Some(url) = &data.pools[0].url {
                                             url.to_string()
+                                        } else {
+                                            "N/A".to_string()
+                                        }
+                                    } else {
+                                        "N/A".to_string()
+                                    }
+                                },
+                                worker: {
+                                    if !data.pools.is_empty() {
+                                        if let Some(user) = &data.pools[0].user {
+                                            user.to_string()
                                         } else {
                                             "N/A".to_string()
                                         }

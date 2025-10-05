@@ -3,6 +3,38 @@ use eframe::egui;
 use egui::Color32;
 use egui_plot::{Line, Plot, PlotPoints};
 
+// Linear interpolation between data points for smoother visualization
+fn interpolate_points(points: &[(f64, f64)], points_per_interval: usize) -> Vec<[f64; 2]> {
+    if points.len() < 2 {
+        return points.iter().map(|(x, y)| [*x, *y]).collect();
+    }
+
+    let mut interpolated = Vec::new();
+
+    for i in 0..points.len() - 1 {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[i + 1];
+
+        // Add the starting point
+        interpolated.push([x1, y1]);
+
+        // Add interpolated points between this and next
+        for j in 1..points_per_interval {
+            let t = j as f64 / points_per_interval as f64;
+            let x = x1 + t * (x2 - x1);
+            let y = y1 + t * (y2 - y1);
+            interpolated.push([x, y]);
+        }
+    }
+
+    // Add the final point
+    if let Some(&(x, y)) = points.last() {
+        interpolated.push([x, y]);
+    }
+
+    interpolated
+}
+
 pub fn draw_stats_card(
     ui: &mut egui::Ui,
     miners: &[MinerInfo],
@@ -148,6 +180,9 @@ pub fn draw_stats_card(
 
     // Fleet Hashrate History Plot
     if !fleet_hashrate_history.is_empty() {
+        // Request faster repaints for smoother plot updates
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+
         egui::Frame::new()
             .fill(Color32::from_rgb(28, 28, 28))
             .stroke(egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 60)))
@@ -174,10 +209,14 @@ pub fn draw_stats_card(
 
                 ui.add_space(5.0);
 
-                let points: Vec<[f64; 2]> = fleet_hashrate_history
+                // Convert to (timestamp, hashrate) tuples and apply interpolation
+                let raw_points: Vec<(f64, f64)> = fleet_hashrate_history
                     .iter()
-                    .map(|(ts, hr)| [*ts, hr / divisor])
+                    .map(|(ts, hr)| (*ts, hr / divisor))
                     .collect();
+
+                // Interpolate with 4 points between each actual data point for smoothness
+                let points = interpolate_points(&raw_points, 4);
 
                 // Calculate y-axis range with some padding for better visibility
                 let min_hashrate = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
@@ -207,8 +246,7 @@ pub fn draw_stats_card(
                         plot_ui.line(
                             Line::new("Fleet Hashrate", PlotPoints::from(points))
                                 .color(Color32::from_rgb(255, 87, 51))
-                                .width(2.0)
-                                .style(egui_plot::LineStyle::Dotted { spacing: 5.0 }),
+                                .width(2.0),
                         );
                     });
             });

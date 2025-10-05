@@ -15,6 +15,7 @@ pub fn draw_miners_table(
     sort_column: Option<SortColumn>,
     sort_direction: SortDirection,
     scan_progress: Arc<Mutex<ScanProgress>>,
+    export_clicked: &mut bool,
 ) -> Option<SortColumn> {
     let mut clicked_column: Option<SortColumn> = None;
 
@@ -106,6 +107,18 @@ pub fn draw_miners_table(
                     .color(Color32::from_rgb(160, 160, 160))
                     .monospace(),
             );
+            ui.add_space(10.0);
+            if ui
+                .button(
+                    egui::RichText::new("📊 Export CSV")
+                        .size(11.0)
+                        .color(Color32::WHITE)
+                        .monospace(),
+                )
+                .clicked()
+            {
+                *export_clicked = true;
+            }
 
             ui.add_space(10.0);
 
@@ -317,7 +330,8 @@ pub fn draw_miners_table(
                             .column(Column::initial(100.0).resizable(true)) // Efficiency
                             .column(Column::initial(120.0).resizable(true)) // Temperature
                             .column(Column::initial(120.0).resizable(true)) // Fan Speed
-                            .column(Column::remainder().at_least(200.0).resizable(true)) // Pool
+                            .column(Column::initial(200.0).resizable(true)) // Pool
+                            .column(Column::remainder().at_least(150.0).resizable(true)) // Worker
                             .header(30.0, |mut header| {
                                 let get_indicator = |col: SortColumn| {
                                     if sort_column == Some(col) {
@@ -523,6 +537,22 @@ pub fn draw_miners_table(
                                         clicked_column = Some(SortColumn::Pool);
                                     }
                                 });
+                                header.col(|ui| {
+                                    if ui
+                                        .button(
+                                            egui::RichText::new(format!(
+                                                "WORKER{}",
+                                                get_indicator(SortColumn::Worker)
+                                            ))
+                                            .size(11.0)
+                                            .color(Color32::from_rgb(255, 87, 51))
+                                            .monospace(),
+                                        )
+                                        .clicked()
+                                    {
+                                        clicked_column = Some(SortColumn::Worker);
+                                    }
+                                });
                             })
                             .body(|mut body| {
                                 for miner in filtered_miners.iter() {
@@ -658,6 +688,14 @@ pub fn draw_miners_table(
                                         row.col(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&miner.pool)
+                                                    .size(11.0)
+                                                    .color(Color32::from_rgb(200, 200, 200))
+                                                    .monospace(),
+                                            );
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&miner.worker)
                                                     .size(11.0)
                                                     .color(Color32::from_rgb(200, 200, 200))
                                                     .monospace(),

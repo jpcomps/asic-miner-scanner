@@ -131,6 +131,7 @@ impl MinerScannerApp {
                 SortColumn::Temperature => a.temperature.cmp(&b.temperature),
                 SortColumn::FanSpeed => a.fan_speed.cmp(&b.fan_speed),
                 SortColumn::Pool => a.pool.cmp(&b.pool),
+                SortColumn::Worker => a.worker.cmp(&b.worker),
             };
 
             match direction {
@@ -191,6 +192,56 @@ impl MinerScannerApp {
                 let end = format!("{}.{}", &start[..last_dot_pos], end_octet);
                 self.scan_control_state.ip_range_start = start;
                 self.scan_control_state.ip_range_end = end;
+            }
+        }
+    }
+
+    fn export_miners_to_csv(&self) {
+        use chrono::Local;
+        use std::fs;
+
+        let miners = self.miners.lock().unwrap();
+        if miners.is_empty() {
+            return;
+        }
+
+        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let filename = format!("miner_export_{}.csv", timestamp);
+
+        // Use file picker to save the file
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&filename)
+            .add_filter("CSV Files", &["csv"])
+            .save_file()
+        {
+            let mut csv_content = String::new();
+
+            // Header
+            csv_content.push_str("IP,Hostname,Model,Firmware,Control Board,Hashrate (TH/s),Wattage (W),Efficiency (W/TH),Temperature (°C),Fan Speed (RPM),Pool,Worker\n");
+
+            // Rows
+            for miner in miners.iter() {
+                csv_content.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    miner.ip,
+                    miner.hostname,
+                    miner.model,
+                    miner.firmware_version,
+                    miner.control_board,
+                    miner.hashrate.replace(" TH/s", ""),
+                    miner.wattage.replace(" W", ""),
+                    miner.efficiency.replace(" W/TH", ""),
+                    miner.temperature.replace("°C", ""),
+                    miner.fan_speed.replace(" RPM", ""),
+                    miner.pool,
+                    miner.worker
+                ));
+            }
+
+            if let Err(e) = fs::write(&path, csv_content) {
+                eprintln!("Failed to export CSV: {}", e);
+            } else {
+                println!("Exported {} miners to {}", miners.len(), path.display());
             }
         }
     }
@@ -435,6 +486,7 @@ impl eframe::App for MinerScannerApp {
                     let miners = self.miners.lock().unwrap().clone();
                     drop(miners);
 
+                    let mut export_clicked = false;
                     let clicked_column = ui::draw_miners_table(
                         ui,
                         &self.miners.lock().unwrap(),
@@ -444,11 +496,17 @@ impl eframe::App for MinerScannerApp {
                         self.sort_column,
                         self.sort_direction,
                         Arc::clone(&self.scan_progress),
+                        &mut export_clicked,
                     );
 
                     // Sort if a column header was clicked
                     if let Some(column) = clicked_column {
                         self.sort_miners(column);
+                    }
+
+                    // Export to CSV if export button was clicked
+                    if export_clicked {
+                        self.export_miners_to_csv();
                     }
                 });
             });
