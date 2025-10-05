@@ -1,4 +1,4 @@
-use crate::models::MinerInfo;
+use crate::models::{MinerInfo, RecordingState};
 use asic_rs::MinerFactory;
 use eframe::egui;
 use egui::Color32;
@@ -12,6 +12,8 @@ pub fn draw_miner_detail_modal(
     miners_arc: Arc<Mutex<Vec<MinerInfo>>>,
     detail_refresh_times: &mut HashMap<String, Instant>,
     detail_metrics_history: &mut HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    recording_states: &mut HashMap<String, RecordingState>,
+    detail_refresh_interval_secs: &mut u64,
 ) {
     let mut miners_to_close = Vec::new();
 
@@ -24,16 +26,15 @@ pub fn draw_miner_detail_modal(
 
         if let Some(miner) = current_miner {
             egui::Window::new(
-                egui::RichText::new(format!(
-                    "🔍 Miner Details - {} - {}",
-                    miner.ip, miner.model
-                ))
-                .size(12.0)
-                .monospace(),
+                egui::RichText::new(format!("🔍 Miner Details - {} - {}", miner.ip, miner.model))
+                    .size(12.0)
+                    .monospace(),
             )
             .id(egui::Id::new(format!("detail_modal_{}", miner.ip)))
-            .default_width(1200.0)
-            .default_height(700.0)
+            .default_width(900.0)
+            .default_height(600.0)
+            .min_width(800.0)
+            .min_height(600.0)
             .resizable(true)
             .collapsible(true)
             .open(&mut is_open)
@@ -74,6 +75,8 @@ pub fn draw_miner_detail_modal(
                                     miners_arc.clone(),
                                     detail_refresh_times,
                                     detail_metrics_history,
+                                    recording_states,
+                                    detail_refresh_interval_secs,
                                 );
                             });
                     });
@@ -97,6 +100,13 @@ pub fn draw_miner_detail_modal(
         // Clean up history for this miner
         detail_metrics_history.remove(&miner.ip);
         detail_refresh_times.remove(&miner.ip);
+
+        // Delete recording file if it exists
+        if let Some(recording) = recording_states.remove(&miner.ip) {
+            if let Err(e) = crate::recording::delete_recording(&recording) {
+                eprintln!("✗ Failed to delete recording for {}: {}", miner.ip, e);
+            }
+        }
     }
 }
 
@@ -309,11 +319,13 @@ fn draw_controls_and_graphs(
     miners_arc: Arc<Mutex<Vec<MinerInfo>>>,
     detail_refresh_times: &mut HashMap<String, Instant>,
     detail_metrics_history: &mut HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    recording_states: &mut HashMap<String, RecordingState>,
+    detail_refresh_interval_secs: &mut u64,
 ) {
     // Auto-refresh logic
     let last_refresh_time = detail_refresh_times.get(&miner.ip).cloned();
     let should_auto_refresh = if let Some(last_time) = last_refresh_time {
-        last_time.elapsed().as_secs() >= 10 // Auto-refresh every 10 seconds
+        last_time.elapsed().as_secs() >= *detail_refresh_interval_secs
     } else {
         true // First time, refresh immediately
     };
@@ -407,6 +419,15 @@ fn draw_controls_and_graphs(
                     avg_temp,
                     board_temps,
                 ));
+
+            // If recording is active, append data point to CSV
+            if let Some(recording) = recording_states.get_mut(&miner.ip) {
+                if recording.is_recording {
+                    if let Err(e) = crate::recording::append_data_point(recording, miner) {
+                        eprintln!("✗ Failed to append recording data: {e}");
+                    }
+                }
+            }
         }
     }
 
@@ -447,10 +468,30 @@ fn draw_controls_and_graphs(
             });
             detail_refresh_times.insert(miner.ip.clone(), Instant::now());
         }
+
+        ui.add_space(15.0);
+
+        // Refresh interval slider
+        ui.label(
+            egui::RichText::new("Auto-refresh interval:")
+                .size(10.0)
+                .color(Color32::from_rgb(120, 120, 120)),
+        );
+        ui.add(
+            egui::Slider::new(detail_refresh_interval_secs, 5..=60)
+                .suffix("s")
+                .text(""),
+        );
     });
 
     // Web interface and control buttons
-    draw_control_buttons(ui, miner, miners_arc, detail_refresh_times);
+    draw_control_buttons(
+        ui,
+        miner,
+        miners_arc,
+        detail_refresh_times,
+        recording_states,
+    );
 
     // Draw graphs
     draw_metrics_graphs(ui, miner, detail_metrics_history);
@@ -461,33 +502,44 @@ fn draw_control_buttons(
     miner: &MinerInfo,
     miners_arc: Arc<Mutex<Vec<MinerInfo>>>,
     detail_refresh_times: &mut HashMap<String, Instant>,
+    recording_states: &mut HashMap<String, RecordingState>,
 ) {
     let url = format!("http://{}", miner.ip);
+
+    // Quick Actions heading
+    ui.heading("Quick Actions");
+    ui.add_space(5.0);
+
     ui.horizontal(|ui| {
         // Web interface button
         if ui
             .add_sized(
-                [200.0, 40.0],
+                [150.0, 32.0],
                 egui::Button::new(
-                    egui::RichText::new("🌐 Open Web Interface")
-                        .size(16.0)
+                    egui::RichText::new("🌐 Web Interface")
+                        .size(13.0)
                         .color(Color32::WHITE),
                 )
                 .fill(Color32::from_rgb(100, 150, 255))
-                .corner_radius(8.0),
+                .corner_radius(6.0),
             )
             .clicked()
         {
             let _ = webbrowser::open(&url);
         }
-        // Quick actions section
-        ui.separator();
+
+        ui.add_space(5.0);
+
         // Miner control actions
         if ui
             .add_sized(
-                [180.0, 40.0],
-                egui::Button::new(egui::RichText::new("▶ START").color(Color32::WHITE))
-                    .fill(Color32::from_rgb(100, 200, 100)),
+                [120.0, 32.0],
+                egui::Button::new(
+                    egui::RichText::new("▶ START")
+                        .size(13.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(100, 200, 100)),
             )
             .clicked()
         {
@@ -508,9 +560,13 @@ fn draw_control_buttons(
 
         if ui
             .add_sized(
-                [180.0, 40.0],
-                egui::Button::new(egui::RichText::new("■ STOP").color(Color32::WHITE))
-                    .fill(Color32::from_rgb(255, 100, 100)),
+                [120.0, 32.0],
+                egui::Button::new(
+                    egui::RichText::new("■ STOP")
+                        .size(13.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(255, 100, 100)),
             )
             .clicked()
         {
@@ -531,9 +587,13 @@ fn draw_control_buttons(
 
         if ui
             .add_sized(
-                [180.0, 40.0],
-                egui::Button::new(egui::RichText::new("💡 FAULT LIGHT").color(Color32::WHITE))
-                    .fill(Color32::from_rgb(255, 165, 0)),
+                [130.0, 32.0],
+                egui::Button::new(
+                    egui::RichText::new("💡 FAULT LIGHT")
+                        .size(13.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(255, 165, 0)),
             )
             .clicked()
         {
@@ -569,6 +629,117 @@ fn draw_control_buttons(
             detail_refresh_times.insert(miner.ip.clone(), Instant::now());
         }
     });
+
+    // Recording controls - new row
+    ui.add_space(15.0);
+    ui.heading("Metrics Recording");
+    ui.add_space(5.0);
+
+    ui.horizontal(|ui| {
+        // Check recording state without holding reference
+        let is_recording = recording_states
+            .get(&miner.ip)
+            .map(|r| r.is_recording)
+            .unwrap_or(false);
+        let recording_info = recording_states
+            .get(&miner.ip)
+            .map(|r| (r.start_time.elapsed().as_secs(), r.row_count));
+
+        if is_recording {
+            // Show stop button and recording status
+            if let Some((elapsed, row_count)) = recording_info {
+                let mins = elapsed / 60;
+                let secs = elapsed % 60;
+
+                if ui
+                    .add_sized(
+                        [150.0, 32.0],
+                        egui::Button::new(
+                            egui::RichText::new("⏹ STOP RECORDING")
+                                .size(13.0)
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(200, 50, 50)),
+                    )
+                    .clicked()
+                {
+                    if let Some(recording) = recording_states.get_mut(&miner.ip) {
+                        crate::recording::stop_recording(recording);
+                    }
+                }
+
+                ui.label(
+                    egui::RichText::new(format!("📊 {}:{:02} ({} rows)", mins, secs, row_count))
+                        .color(Color32::from_rgb(255, 100, 100))
+                        .size(14.0),
+                );
+            }
+        } else {
+            // Show start button
+            if ui
+                .add_sized(
+                    [150.0, 32.0],
+                    egui::Button::new(
+                        egui::RichText::new("🔴 START RECORDING")
+                            .size(13.0)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(255, 87, 51)),
+                )
+                .clicked()
+            {
+                match crate::recording::start_recording(miner) {
+                    Ok(recording_state) => {
+                        recording_states.insert(miner.ip.clone(), recording_state);
+                    }
+                    Err(e) => {
+                        eprintln!("✗ Failed to start recording: {e}");
+                    }
+                }
+            }
+
+            // Show export button if there's a stopped recording with data
+            if let Some((_, row_count)) = recording_info {
+                if row_count > 0 {
+                    if ui
+                        .add_sized(
+                            [140.0, 32.0],
+                            egui::Button::new(
+                                egui::RichText::new("💾 EXPORT TO CSV")
+                                    .size(13.0)
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(100, 150, 255)),
+                        )
+                        .clicked()
+                    {
+                        // Open file dialog
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("CSV", &["csv"])
+                            .set_file_name(&format!("miner_{}.csv", miner.ip.replace(".", "_")))
+                            .save_file()
+                        {
+                            if let Some(recording) = recording_states.get(&miner.ip) {
+                                match crate::recording::export_recording(
+                                    recording,
+                                    path.to_str().unwrap(),
+                                ) {
+                                    Ok(_) => println!("✓ Exported recording to: {:?}", path),
+                                    Err(e) => eprintln!("✗ Failed to export: {e}"),
+                                }
+                            }
+                        }
+                    }
+
+                    ui.label(
+                        egui::RichText::new(format!("📁 {} rows ready", row_count))
+                            .color(Color32::from_rgb(150, 150, 150))
+                            .size(14.0),
+                    );
+                }
+            }
+        }
+    });
 }
 
 fn draw_metrics_graphs(
@@ -586,8 +757,8 @@ fn draw_metrics_graphs(
         ui.add_space(5.0);
 
         if !history_data.is_empty() {
-            // Find the earliest timestamp to normalize
-            let start_time = history_data.first().map(|p| p.0).unwrap_or(0.0);
+            use chrono::{DateTime, Local, TimeZone};
+
             let num_boards = history_data
                 .first()
                 .map(|(_, _, _, boards, _, _)| boards.len())
@@ -599,7 +770,7 @@ fn draw_metrics_graphs(
 
                 let total_hashrate_points: Vec<[f64; 2]> = history_data
                     .iter()
-                    .map(|(ts, hr, _, _, _, _)| [(ts - start_time), *hr])
+                    .map(|(ts, hr, _, _, _, _)| [*ts, *hr])
                     .collect();
 
                 let max_hashrate = total_hashrate_points
@@ -614,13 +785,19 @@ fn draw_metrics_graphs(
                     .include_y(0.0)
                     .include_y(max_hashrate * 1.1)
                     .legend(Legend::default())
+                    .x_axis_formatter(|val, _range| {
+                        if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
+                            dt.format("%H:%M:%S").to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
                     .show(ui, |plot_ui| {
                         // Total hashrate line
                         plot_ui.line(
-                            Line::new("total_hashrate", PlotPoints::from(total_hashrate_points.clone()))
+                            Line::new("Total", PlotPoints::from(total_hashrate_points.clone()))
                                 .color(Color32::from_rgb(100, 200, 255))
-                                .width(2.5)
-                                .name("Total"),
+                                .width(2.5),
                         );
 
                         // Per-board hashrate lines
@@ -635,18 +812,18 @@ fn draw_metrics_graphs(
                             let board_points: Vec<[f64; 2]> = history_data
                                 .iter()
                                 .filter_map(|(ts, _, _, boards, _, _)| {
-                                    boards
-                                        .get(board_idx)
-                                        .map(|hr| [(ts - start_time), *hr])
+                                    boards.get(board_idx).map(|hr| [*ts, *hr])
                                 })
                                 .collect();
 
                             if !board_points.is_empty() {
                                 plot_ui.line(
-                                    Line::new("Points", PlotPoints::from(board_points))
-                                        .color(board_colors[board_idx % board_colors.len()])
-                                        .width(1.5)
-                                        .name(format!("Board {board_idx}")),
+                                    Line::new(
+                                        format!("Board {board_idx}"),
+                                        PlotPoints::from(board_points),
+                                    )
+                                    .color(board_colors[board_idx % board_colors.len()])
+                                    .width(1.5),
                                 );
                             }
                         }
@@ -665,13 +842,10 @@ fn draw_metrics_graphs(
 
                 let avg_temp_points: Vec<[f64; 2]> = history_data
                     .iter()
-                    .map(|(ts, _, _, _, avg_t, _)| [(ts - start_time), *avg_t])
+                    .map(|(ts, _, _, _, avg_t, _)| [*ts, *avg_t])
                     .collect();
 
-                let max_temp = avg_temp_points
-                    .iter()
-                    .map(|p| p[1])
-                    .fold(0.0f64, f64::max);
+                let max_temp = avg_temp_points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
 
                 Plot::new(format!("temperature_{}", miner.ip))
                     .height(200.0)
@@ -680,13 +854,19 @@ fn draw_metrics_graphs(
                     .include_y(0.0)
                     .include_y(max_temp * 1.1)
                     .legend(Legend::default())
+                    .x_axis_formatter(|val, _range| {
+                        if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
+                            dt.format("%H:%M:%S").to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
                     .show(ui, |plot_ui| {
                         // Average temperature line
                         plot_ui.line(
-                            Line::new("temp", PlotPoints::from(avg_temp_points.clone()))
+                            Line::new("Average", PlotPoints::from(avg_temp_points.clone()))
                                 .color(Color32::from_rgb(255, 100, 100))
-                                .width(2.5)
-                                .name("Average"),
+                                .width(2.5),
                         );
 
                         // Per-board temperature lines
@@ -701,16 +881,18 @@ fn draw_metrics_graphs(
                             let board_temp_points: Vec<[f64; 2]> = history_data
                                 .iter()
                                 .filter_map(|(ts, _, _, _, _, temps)| {
-                                    temps.get(board_idx).map(|t| [(ts - start_time), *t])
+                                    temps.get(board_idx).map(|t| [*ts, *t])
                                 })
                                 .collect();
 
                             if !board_temp_points.is_empty() {
                                 plot_ui.line(
-                                    Line::new("board_temp", PlotPoints::from(board_temp_points))
-                                        .color(board_colors[board_idx % board_colors.len()])
-                                        .width(1.5)
-                                        .name(format!("Board {board_idx}")),
+                                    Line::new(
+                                        format!("Board {board_idx}"),
+                                        PlotPoints::from(board_temp_points),
+                                    )
+                                    .color(board_colors[board_idx % board_colors.len()])
+                                    .width(1.5),
                                 );
                             }
                         }
@@ -723,13 +905,71 @@ fn draw_metrics_graphs(
 
             ui.add_space(15.0);
 
-            // Row 3: Power
+            // Row 3: Efficiency (W/TH)
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Efficiency (W/TH)").strong());
+
+                let efficiency_points: Vec<[f64; 2]> = history_data
+                    .iter()
+                    .filter_map(|(ts, hr, pw, _, _, _)| {
+                        if *hr > 0.0 {
+                            Some([*ts, pw / hr])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !efficiency_points.is_empty() {
+                    let max_efficiency = efficiency_points
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(0.0f64, f64::max);
+
+                    Plot::new(format!("efficiency_{}", miner.ip))
+                        .height(200.0)
+                        .allow_zoom([true, false])
+                        .allow_scroll(false)
+                        .include_y(0.0)
+                        .include_y(max_efficiency * 1.1)
+                        .x_axis_formatter(|val, _range| {
+                            if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
+                                dt.format("%H:%M:%S").to_string()
+                            } else {
+                                String::new()
+                            }
+                        })
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(
+                                Line::new(
+                                    "Efficiency",
+                                    PlotPoints::from(efficiency_points.clone()),
+                                )
+                                .color(Color32::from_rgb(150, 255, 150))
+                                .width(2.0),
+                            );
+                        });
+
+                    if let Some(latest) = history_data.last() {
+                        let current_eff = if latest.1 > 0.0 {
+                            latest.2 / latest.1
+                        } else {
+                            0.0
+                        };
+                        ui.label(format!("Current: {:.2} W/TH", current_eff));
+                    }
+                }
+            });
+
+            ui.add_space(15.0);
+
+            // Row 4: Power
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Power").strong());
 
                 let power_points: Vec<[f64; 2]> = history_data
                     .iter()
-                    .map(|(ts, _, pw, _, _, _)| [(ts - start_time), *pw])
+                    .map(|(ts, _, pw, _, _, _)| [*ts, *pw])
                     .collect();
 
                 let max_power = power_points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
@@ -740,9 +980,16 @@ fn draw_metrics_graphs(
                     .allow_scroll(false)
                     .include_y(0.0)
                     .include_y(max_power * 1.1)
+                    .x_axis_formatter(|val, _range| {
+                        if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
+                            dt.format("%H:%M:%S").to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
                     .show(ui, |plot_ui| {
                         plot_ui.line(
-                            Line::new("power", PlotPoints::from(power_points.clone()))
+                            Line::new("Power", PlotPoints::from(power_points.clone()))
                                 .color(Color32::from_rgb(255, 165, 0))
                                 .width(2.0),
                         );

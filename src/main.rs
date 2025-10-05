@@ -1,10 +1,11 @@
 mod config;
 mod models;
+mod recording;
 mod scanner;
 mod ui;
 
 use eframe::egui;
-use egui::{Color32, ColorImage, TextureHandle};
+use egui::Color32;
 use models::{MinerInfo, SavedRange, ScanProgress, SortColumn, SortDirection};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -15,12 +16,12 @@ fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
-            .with_title("ASIC-RS Miner Scanner"),
+            .with_title("asic-rs Miner Scanner"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "ASIC-RS Miner Scanner",
+        "asic-rs Miner Scanner",
         options,
         Box::new(|cc| Ok(Box::new(MinerScannerApp::new(cc)))),
     )
@@ -40,10 +41,12 @@ struct MinerScannerApp {
     detail_metrics_history: HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
     search_query: String,
     scan_control_state: ScanControlState,
+    recording_states: HashMap<String, models::RecordingState>, // IP -> RecordingState
+    detail_refresh_interval_secs: u64,                         // Refresh interval for detail modal
 }
 
 impl MinerScannerApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let saved_ranges = config::load_config();
 
         Self {
@@ -73,6 +76,8 @@ impl MinerScannerApp {
                 auto_scan_interval_secs: 120,
                 last_scan_time: None,
             },
+            recording_states: HashMap::new(),
+            detail_refresh_interval_secs: 10,
         }
     }
 
@@ -213,6 +218,8 @@ impl eframe::App for MinerScannerApp {
             Arc::clone(&self.miners),
             &mut self.detail_refresh_times,
             &mut self.detail_metrics_history,
+            &mut self.recording_states,
+            &mut self.detail_refresh_interval_secs,
         );
 
         // Top bar
@@ -345,6 +352,7 @@ impl eframe::App for MinerScannerApp {
                         &mut self.detail_view_miners,
                         self.sort_column,
                         self.sort_direction,
+                        Arc::clone(&self.scan_progress),
                     );
 
                     // Sort if a column header was clicked

@@ -7,13 +7,15 @@ A high-performance, real-time ASIC miner management and monitoring application b
 
 ## Features
 
-- 🔍 **Network Scanning**: Automatically discover ASIC miners on your network
+- 🔍 **Network Scanning**: Automatically discover ASIC miners on your network with real-time progress tracking
 - 📊 **Real-time Monitoring**: Live hashrate, temperature, power consumption, and efficiency metrics
-- 📈 **Historical Data**: Track performance over time with interactive graphs
+- 📈 **Historical Data**: Track performance over time with interactive graphs showing timestamped data
+- 📝 **Metrics Recording**: Record miner performance data to CSV files for long-term analysis
 - 🎛️ **Remote Control**: Start, stop, and manage fault lights on miners
 - 🔎 **Search & Filter**: Quickly find miners by IP, hostname, model, or pool
 - 💾 **Saved Ranges**: Save and reuse IP ranges for quick scanning
 - 🔄 **Auto-scan**: Automatically refresh miner data at configurable intervals
+- ⚙️ **Configurable Refresh**: Adjust detail view refresh interval from 5-60 seconds
 - 📱 **Web Interface**: One-click access to miner web interfaces
 - 🎨 **Dark Theme**: Easy-on-the-eyes interface for long monitoring sessions
 
@@ -47,6 +49,8 @@ cargo run --release
 3. Click "⟳ SCAN ALL" to discover miners
 4. Miners will appear in the table as they're discovered
 
+**Note:** Saved IP ranges are stored in `~/asic-miner-scanner/scanner_config.json` and persist between sessions.
+
 ### Monitoring Miners
 
 - Click on any miner IP to open detailed information
@@ -75,6 +79,55 @@ cargo run --release
   - Stop all selected miners
   - Toggle fault lights
 
+### Recording Metrics
+
+The metrics recording feature allows you to capture detailed performance data over time for analysis, troubleshooting, or compliance purposes.
+
+**Starting a Recording:**
+1. Open the detail view for a miner by clicking its IP address
+2. Under "Metrics Recording", click "🔴 START RECORDING"
+3. Data will be automatically collected every refresh interval (default: 10 seconds)
+4. The recording status shows elapsed time and number of rows captured
+
+**Stopping a Recording:**
+1. Click "⏹ STOP RECORDING" to pause data collection
+2. The recording is saved in `~/asic-miner-scanner/recordings/`
+3. File format: `recording_<IP>_<Model>_<MAC>_<timestamp>.csv`
+
+**Exporting Recordings:**
+1. After stopping a recording, click "💾 EXPORT TO CSV"
+2. Choose a destination and filename
+3. The CSV file contains comprehensive metrics:
+   - Timestamp, IP, MAC address, model, firmware
+   - Total hashrate and per-board hashrates (TH/s)
+   - Power consumption (W) and efficiency (W/TH)
+   - Average temperature and per-board temperatures (°C)
+   - Fan speeds (RPM)
+
+**Use Cases:**
+- **Performance Analysis**: Track hashrate stability over hours/days
+- **Thermal Monitoring**: Identify temperature trends and cooling issues
+- **Efficiency Studies**: Analyze power consumption patterns
+- **Warranty Claims**: Document performance issues with timestamped data
+- **Fleet Optimization**: Compare performance across multiple miners
+
+**Tips:**
+- Recordings continue even if the detail modal is closed
+- You can record multiple miners simultaneously
+- Lower refresh intervals (5s) provide more granular data
+- **Important:** Temporary recording files are automatically deleted when closing the detail modal
+- Make sure to export recordings before closing if you want to keep them
+- CSV files can be imported into Excel, Google Sheets, or analysis tools
+
+### Configurable Refresh Interval
+
+Adjust how frequently the detail view updates:
+1. Open any miner's detail view
+2. Use the "Auto-refresh interval" slider (5-60 seconds)
+3. Lower values provide near real-time updates
+4. Higher values reduce network traffic and API load
+5. The setting applies globally to all detail views
+
 ### Auto-scan
 
 Enable auto-scan to automatically refresh miner data:
@@ -93,6 +146,7 @@ asic-miner-scanner/
 │   ├── models.rs            # Data structures & types
 │   ├── config.rs            # Configuration save/load
 │   ├── scanner.rs           # Network scanning logic
+│   ├── recording.rs         # CSV metrics recording
 │   └── ui/
 │       ├── mod.rs           # UI module exports
 │       ├── stats.rs         # Fleet overview component
@@ -126,6 +180,12 @@ The application follows a modular architecture with clear separation of concerns
 - Manages scan progress updates
 - Collects and structures miner data
 
+**`recording.rs`** - Metrics Recording
+- Manages CSV file creation and data appending
+- Writes performance metrics to timestamped files
+- Handles export and cleanup operations
+- Stores recordings in `~/asic-miner-scanner/recordings/`
+
 **`main.rs`** - Application Coordinator
 - Entry point and app initialization
 - Manages application state (`MinerScannerApp`)
@@ -150,12 +210,14 @@ The application follows a modular architecture with clear separation of concerns
 - Handles search/filter functionality
 - Manages bulk operations
 - Provides selection controls
+- Shows scanning progress when no miners found
 
 **`detail.rs`** - Detail Modal
 - Shows comprehensive miner information
-- Renders real-time graphs (hashrate, temperature, power)
+- Renders real-time graphs with timestamps (hashrate, temperature, efficiency, power)
 - Provides individual miner controls
-- Auto-refreshes every 10 seconds
+- Configurable auto-refresh interval (5-60 seconds)
+- Integrated metrics recording controls
 
 ### Data Flow
 
@@ -199,6 +261,10 @@ User Input → UI Components → main.rs → scanner.rs → asic-rs library
 - **serde/serde_json** - Serialization
 - **webbrowser** - Opening web interfaces
 - **ipnetwork** - IP address handling
+- **csv** - CSV file generation
+- **chrono** - Timestamp handling
+- **rfd** - Native file dialogs
+- **dirs** - Cross-platform directory paths
 
 ## Optimization Settings
 
@@ -219,6 +285,23 @@ MinerFactory::new()
     .with_port_check(true)
     .scan_by_range(&range)
 ```
+
+## File Locations
+
+When you ship the binary, all configuration and data files are stored in the user's home directory:
+
+**Configuration:**
+- `~/asic-miner-scanner/scanner_config.json` - Saved IP ranges
+
+**Recordings:**
+- `~/asic-miner-scanner/recordings/` - CSV metric recordings
+- Filename format: `recording_<IP>_<Model>_<MAC>_<timestamp>.csv`
+
+**Cross-Platform Paths:**
+- **Linux/macOS**: `/home/username/asic-miner-scanner/`
+- **Windows**: `C:\Users\username\asic-miner-scanner\`
+
+The application automatically creates these directories on first run, so no manual setup is required.
 
 ## Troubleshooting
 

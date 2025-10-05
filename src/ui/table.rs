@@ -1,8 +1,9 @@
-use crate::models::{MinerInfo, SortColumn, SortDirection};
+use crate::models::{MinerInfo, ScanProgress, SortColumn, SortDirection};
 use asic_rs::MinerFactory;
 use eframe::egui;
 use egui::{Color32, FontId};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 pub fn draw_miners_table(
     ui: &mut egui::Ui,
@@ -12,6 +13,7 @@ pub fn draw_miners_table(
     detail_view_miners: &mut Vec<MinerInfo>,
     sort_column: Option<SortColumn>,
     sort_direction: SortDirection,
+    scan_progress: Arc<Mutex<ScanProgress>>,
 ) -> Option<SortColumn> {
     let mut clicked_column: Option<SortColumn> = None;
 
@@ -31,6 +33,66 @@ pub fn draw_miners_table(
             })
             .collect()
     };
+
+    // Show scanning progress if no miners found yet
+    let progress = scan_progress.lock().unwrap();
+    if miners.is_empty() && progress.scanning {
+        ui.vertical_centered(|ui| {
+            ui.add_space(40.0);
+
+            ui.label(
+                egui::RichText::new("🔍 Scanning for miners...")
+                    .size(16.0)
+                    .color(Color32::from_rgb(255, 87, 51)),
+            );
+
+            ui.add_space(10.0);
+
+            let progress_text = if progress.total_ips > 0 {
+                format!(
+                    "Scanned {} / {} IPs ({} miners found)",
+                    progress.scanned_ips, progress.total_ips, progress.found_miners
+                )
+            } else {
+                "Initializing scan...".to_string()
+            };
+
+            ui.label(
+                egui::RichText::new(progress_text)
+                    .size(12.0)
+                    .color(Color32::from_rgb(180, 180, 180)),
+            );
+
+            ui.add_space(10.0);
+
+            // Progress bar
+            if progress.total_ips > 0 {
+                let progress_fraction = progress.scanned_ips as f32 / progress.total_ips as f32;
+                ui.add(
+                    egui::ProgressBar::new(progress_fraction)
+                        .text(format!("{:.1}%", progress_fraction * 100.0))
+                        .desired_width(400.0)
+                        .fill(Color32::from_rgb(255, 87, 51)),
+                );
+            } else {
+                ui.spinner();
+            }
+
+            ui.add_space(20.0);
+
+            if !progress.current_ip.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("Current IP: {}", progress.current_ip))
+                        .size(10.0)
+                        .color(Color32::from_rgb(120, 120, 120))
+                        .monospace(),
+                );
+            }
+        });
+        drop(progress);
+        return None;
+    }
+    drop(progress);
 
     // Bulk actions bar
     if !filtered_miners.is_empty() {

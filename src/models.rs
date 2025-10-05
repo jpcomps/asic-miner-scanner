@@ -59,5 +59,12 @@ pub enum SortDirection {
     Descending,
 }
 
-pub const CONFIG_FILE: &str = "scanner_config.json";
 pub const MAX_HISTORY_POINTS: usize = 288; // 24 hours at 5-min intervals
+
+#[derive(Clone, Debug)]
+pub struct RecordingState {
+    pub file_path: String,
+    pub start_time: std::time::Instant,
+    pub row_count: usize,
+    pub is_recording: bool,
+}
