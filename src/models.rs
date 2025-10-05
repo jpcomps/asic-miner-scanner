@@ -37,6 +37,10 @@ pub struct ScanProgress {
     pub total_ips: usize,
     pub scanned_ips: usize,
     pub found_miners: usize,
+    pub scan_start_time: Option<std::time::Instant>,
+    pub total_ranges: usize,
+    pub scanned_ranges: usize,
+    pub scan_duration_secs: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]

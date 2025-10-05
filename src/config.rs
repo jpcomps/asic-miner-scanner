@@ -13,6 +13,12 @@ pub struct AppConfig {
     pub detail_refresh_interval_secs: u64,
     #[serde(default = "default_auto_scan_interval")]
     pub auto_scan_interval_secs: u64,
+    #[serde(default = "default_identification_timeout")]
+    pub identification_timeout_secs: u64,
+    #[serde(default = "default_connectivity_timeout")]
+    pub connectivity_timeout_secs: u64,
+    #[serde(default = "default_connectivity_retries")]
+    pub connectivity_retries: u32,
 }
 
 fn default_refresh_interval() -> u64 {
@@ -21,6 +27,18 @@ fn default_refresh_interval() -> u64 {
 
 fn default_auto_scan_interval() -> u64 {
     120
+}
+
+fn default_identification_timeout() -> u64 {
+    5
+}
+
+fn default_connectivity_timeout() -> u64 {
+    3
+}
+
+fn default_connectivity_retries() -> u32 {
+    2
 }
 
 fn get_config_path() -> Option<PathBuf> {
@@ -44,6 +62,9 @@ pub fn load_config() -> AppConfig {
                     saved_ranges: ranges,
                     detail_refresh_interval_secs: default_refresh_interval(),
                     auto_scan_interval_secs: default_auto_scan_interval(),
+                    identification_timeout_secs: default_identification_timeout(),
+                    connectivity_timeout_secs: default_connectivity_timeout(),
+                    connectivity_retries: default_connectivity_retries(),
                 };
             }
         }

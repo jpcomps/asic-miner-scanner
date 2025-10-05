@@ -207,7 +207,8 @@ pub fn draw_stats_card(
                         plot_ui.line(
                             Line::new("Fleet Hashrate", PlotPoints::from(points))
                                 .color(Color32::from_rgb(255, 87, 51))
-                                .width(2.0),
+                                .width(2.0)
+                                .style(egui_plot::LineStyle::Dotted { spacing: 5.0 }),
                         );
                     });
             });

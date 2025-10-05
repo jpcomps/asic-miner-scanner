@@ -11,6 +11,10 @@ pub struct ScanControlState {
     pub auto_scan_enabled: bool,
     pub auto_scan_interval_secs: u64,
     pub last_scan_time: Option<Instant>,
+    pub identification_timeout_secs: u64,
+    pub connectivity_timeout_secs: u64,
+    pub connectivity_retries: u32,
+    pub show_name_error: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -25,9 +29,23 @@ pub fn draw_scan_and_ranges_card(
     range_to_load: &mut Option<SavedRange>,
 ) {
     // Get progress info early, then drop the lock
-    let (is_scanning, scanned_ips, total_ips) = {
+    let (is_scanning, scanned_ranges, total_ranges, found_miners, scan_elapsed) = {
         let progress = scan_progress.lock().unwrap();
-        (progress.scanning, progress.scanned_ips, progress.total_ips)
+        let elapsed = if progress.scanning {
+            progress
+                .scan_start_time
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0)
+        } else {
+            progress.scan_duration_secs
+        };
+        (
+            progress.scanning,
+            progress.scanned_ranges,
+            progress.total_ranges,
+            progress.found_miners,
+            elapsed,
+        )
     };
 
     egui::Frame::new()
@@ -114,19 +132,129 @@ pub fn draw_scan_and_ranges_card(
 
                 ui.add_space(10.0);
 
-                // Status text
-                let status_text = if is_scanning {
-                    format!("⏳ Scanning: {scanned_ips}/{total_ips}")
-                } else {
-                    "Ready to scan".to_string()
-                };
+                // Show progress bar and stats only when there are saved ranges
+                if !saved_ranges.is_empty() {
+                    // Progress bar
+                    let progress_fraction = if total_ranges > 0 {
+                        scanned_ranges as f32 / total_ranges as f32
+                    } else {
+                        0.0
+                    };
 
-                ui.label(
-                    egui::RichText::new(status_text)
+                    let progress_bar = egui::ProgressBar::new(progress_fraction)
+                        .fill(Color32::from_rgb(255, 87, 51))
+                        .show_percentage();
+                    ui.add(progress_bar);
+
+                    ui.add_space(5.0);
+
+                    // Scan statistics
+                    if is_scanning {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "⏳ Scanning range {}/{} | Found: {} miners | Time: {}s",
+                                scanned_ranges, total_ranges, found_miners, scan_elapsed
+                            ))
+                            .size(10.0)
+                            .color(Color32::from_rgb(160, 160, 160))
+                            .monospace(),
+                        );
+                    } else if total_ranges > 0 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "✓ Last scan: {} miners found in {}s",
+                                found_miners, scan_elapsed
+                            ))
+                            .size(10.0)
+                            .color(Color32::from_rgb(160, 160, 160))
+                            .monospace(),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Ready to scan")
+                                .size(10.0)
+                                .color(Color32::from_rgb(160, 160, 160))
+                                .monospace(),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "No ranges configured - add a range below to begin scanning",
+                        )
                         .size(10.0)
                         .color(Color32::from_rgb(160, 160, 160))
                         .monospace(),
+                    );
+                }
+
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+
+                // Scan Parameters
+                ui.label(
+                    egui::RichText::new("SCAN PARAMETERS:")
+                        .size(11.0)
+                        .color(Color32::from_rgb(180, 180, 180))
+                        .monospace(),
                 );
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("ID TIMEOUT:")
+                            .size(11.0)
+                            .color(Color32::from_rgb(160, 160, 160))
+                            .monospace(),
+                    );
+                    ui.add_space(5.0);
+                    let mut id_timeout = state.identification_timeout_secs as i32;
+                    if ui
+                        .add(egui::DragValue::new(&mut id_timeout).suffix(" s").speed(1))
+                        .changed()
+                    {
+                        state.identification_timeout_secs = id_timeout.max(1) as u64;
+                    }
+
+                    ui.add_space(15.0);
+
+                    ui.label(
+                        egui::RichText::new("CONN TIMEOUT:")
+                            .size(11.0)
+                            .color(Color32::from_rgb(160, 160, 160))
+                            .monospace(),
+                    );
+                    ui.add_space(5.0);
+                    let mut conn_timeout = state.connectivity_timeout_secs as i32;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut conn_timeout)
+                                .suffix(" s")
+                                .speed(1),
+                        )
+                        .changed()
+                    {
+                        state.connectivity_timeout_secs = conn_timeout.max(1) as u64;
+                    }
+
+                    ui.add_space(15.0);
+
+                    ui.label(
+                        egui::RichText::new("RETRIES:")
+                            .size(11.0)
+                            .color(Color32::from_rgb(160, 160, 160))
+                            .monospace(),
+                    );
+                    ui.add_space(5.0);
+                    let mut retries = state.connectivity_retries as i32;
+                    if ui
+                        .add(egui::DragValue::new(&mut retries).speed(1))
+                        .changed()
+                    {
+                        state.connectivity_retries = retries.max(0) as u32;
+                    }
+                });
 
                 ui.add_space(15.0);
                 ui.separator();
@@ -178,11 +306,22 @@ pub fn draw_scan_and_ranges_card(
 
                     ui.add_space(10.0);
 
-                    let text_edit = egui::TextEdit::singleline(&mut state.new_range_name)
+                    let mut text_edit = egui::TextEdit::singleline(&mut state.new_range_name)
                         .font(FontId::monospace(12.0))
                         .desired_width(150.0)
                         .hint_text("e.g. Main Site");
-                    ui.add(text_edit);
+
+                    // Show error styling if validation failed
+                    if state.show_name_error {
+                        text_edit = text_edit.text_color(Color32::from_rgb(255, 100, 100));
+                    }
+
+                    let response = ui.add(text_edit);
+
+                    // Clear error when user starts typing
+                    if response.changed() && !state.new_range_name.is_empty() {
+                        state.show_name_error = false;
+                    }
 
                     ui.add_space(10.0);
 
@@ -195,9 +334,24 @@ pub fn draw_scan_and_ranges_card(
                         )
                         .clicked()
                     {
-                        *on_save_range_clicked = true;
+                        if state.new_range_name.trim().is_empty() {
+                            state.show_name_error = true;
+                        } else {
+                            state.show_name_error = false;
+                            *on_save_range_clicked = true;
+                        }
                     }
                 });
+
+                // Show error message if name is empty
+                if state.show_name_error {
+                    ui.label(
+                        egui::RichText::new("⚠ Range name is required")
+                            .size(10.0)
+                            .color(Color32::from_rgb(255, 100, 100))
+                            .monospace(),
+                    );
+                }
 
                 ui.add_space(15.0);
                 ui.separator();

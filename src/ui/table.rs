@@ -66,21 +66,6 @@ pub fn draw_miners_table(
 
             ui.add_space(10.0);
 
-            // Progress bar
-            if progress.total_ips > 0 {
-                let progress_fraction = progress.scanned_ips as f32 / progress.total_ips as f32;
-                ui.add(
-                    egui::ProgressBar::new(progress_fraction)
-                        .text(format!("{:.1}%", progress_fraction * 100.0))
-                        .desired_width(400.0)
-                        .fill(Color32::from_rgb(255, 87, 51)),
-                );
-            } else {
-                ui.spinner();
-            }
-
-            ui.add_space(20.0);
-
             if !progress.current_ip.is_empty() {
                 ui.label(
                     egui::RichText::new(format!("Current IP: {}", progress.current_ip))

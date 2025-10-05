@@ -63,6 +63,9 @@ pub fn scan_ranges(
     miners: Arc<Mutex<Vec<MinerInfo>>>,
     scan_progress: Arc<Mutex<ScanProgress>>,
     hashrate_history: Arc<Mutex<HashMap<String, Vec<HashratePoint>>>>,
+    identification_timeout_secs: u64,
+    connectivity_timeout_secs: u64,
+    connectivity_retries: u32,
 ) {
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -73,8 +76,9 @@ pub fn scan_ranges(
             for range in ranges {
                 match MinerFactory::new()
                     .with_adaptive_concurrency()
-                    .with_identification_timeout_secs(5)
-                    .with_connectivity_retries(2)
+                    .with_identification_timeout_secs(identification_timeout_secs)
+                    .with_connectivity_timeout_secs(connectivity_timeout_secs)
+                    .with_connectivity_retries(connectivity_retries)
                     .with_port_check(true)
                     .scan_by_range(&range)
                     .await
@@ -86,7 +90,6 @@ pub fn scan_ranges(
                             {
                                 let mut progress = scan_progress.lock().unwrap();
                                 progress.current_ip = ip.clone();
-                                progress.scanned_ips += 1;
                             }
 
                             let data = miner.get_data().await;
@@ -208,6 +211,12 @@ pub fn scan_ranges(
                         eprintln!("Scan error for range {range}: {e:?}");
                     }
                 }
+
+                // Increment scanned ranges after each range completes
+                {
+                    let mut progress = scan_progress.lock().unwrap();
+                    progress.scanned_ranges += 1;
+                }
             }
 
             // Atomically replace miners list with new data (convert HashMap to Vec)
@@ -218,6 +227,10 @@ pub fn scan_ranges(
 
             {
                 let mut progress = scan_progress.lock().unwrap();
+                // Preserve scan duration before clearing
+                if let Some(start_time) = progress.scan_start_time {
+                    progress.scan_duration_secs = start_time.elapsed().as_secs();
+                }
                 progress.scanning = false;
                 progress.current_ip.clear();
             }

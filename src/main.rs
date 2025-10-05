@@ -45,6 +45,9 @@ struct MinerScannerApp {
     detail_refresh_interval_secs: u64,                         // Refresh interval for detail modal
     prev_detail_refresh_interval_secs: u64,                    // Previous value to detect changes
     prev_auto_scan_interval_secs: u64,                         // Previous value to detect changes
+    prev_identification_timeout_secs: u64,                     // Previous value to detect changes
+    prev_connectivity_timeout_secs: u64,                       // Previous value to detect changes
+    prev_connectivity_retries: u32,                            // Previous value to detect changes
     fleet_hashrate_history: Vec<(f64, f64)>,                   // (timestamp, total_hashrate)
     last_fleet_update: Option<Instant>,
 }
@@ -61,6 +64,10 @@ impl MinerScannerApp {
                 total_ips: 0,
                 scanned_ips: 0,
                 found_miners: 0,
+                scan_start_time: None,
+                total_ranges: 0,
+                scanned_ranges: 0,
+                scan_duration_secs: 0,
             })),
             error_message: String::new(),
             sort_column: None,
@@ -79,11 +86,18 @@ impl MinerScannerApp {
                 auto_scan_enabled: true,
                 auto_scan_interval_secs: app_config.auto_scan_interval_secs,
                 last_scan_time: None,
+                identification_timeout_secs: app_config.identification_timeout_secs,
+                connectivity_timeout_secs: app_config.connectivity_timeout_secs,
+                connectivity_retries: app_config.connectivity_retries,
+                show_name_error: false,
             },
             recording_states: HashMap::new(),
             detail_refresh_interval_secs: app_config.detail_refresh_interval_secs,
             prev_detail_refresh_interval_secs: app_config.detail_refresh_interval_secs,
             prev_auto_scan_interval_secs: app_config.auto_scan_interval_secs,
+            prev_identification_timeout_secs: app_config.identification_timeout_secs,
+            prev_connectivity_timeout_secs: app_config.connectivity_timeout_secs,
+            prev_connectivity_retries: app_config.connectivity_retries,
             fleet_hashrate_history: Vec::new(),
             last_fleet_update: None,
         }
@@ -131,6 +145,9 @@ impl MinerScannerApp {
             saved_ranges: self.saved_ranges.clone(),
             detail_refresh_interval_secs: self.detail_refresh_interval_secs,
             auto_scan_interval_secs: self.scan_control_state.auto_scan_interval_secs,
+            identification_timeout_secs: self.scan_control_state.identification_timeout_secs,
+            connectivity_timeout_secs: self.scan_control_state.connectivity_timeout_secs,
+            connectivity_retries: self.scan_control_state.connectivity_retries,
         };
         config::save_config(&app_config);
     }
@@ -153,6 +170,7 @@ impl MinerScannerApp {
                 range,
             });
             self.scan_control_state.new_range_name.clear();
+            self.scan_control_state.show_name_error = false;
             self.save_config();
         }
     }
@@ -196,6 +214,10 @@ impl MinerScannerApp {
             progress.scanned_ips = 0;
             progress.found_miners = 0;
             progress.current_ip.clear();
+            progress.scan_start_time = Some(Instant::now());
+            progress.total_ranges = ranges.len();
+            progress.scanned_ranges = 0;
+            progress.scan_duration_secs = 0;
         }
 
         scanner::scan_ranges(
@@ -203,6 +225,9 @@ impl MinerScannerApp {
             Arc::clone(&self.miners),
             Arc::clone(&self.scan_progress),
             Arc::clone(&self.hashrate_history),
+            self.scan_control_state.identification_timeout_secs,
+            self.scan_control_state.connectivity_timeout_secs,
+            self.scan_control_state.connectivity_retries,
         );
 
         self.scan_control_state.last_scan_time = Some(Instant::now());
@@ -270,12 +295,21 @@ impl eframe::App for MinerScannerApp {
             &mut self.detail_refresh_interval_secs,
         );
 
-        // Save config if refresh interval or auto scan interval changed
+        // Save config if any interval or scan parameter changed
         if self.detail_refresh_interval_secs != self.prev_detail_refresh_interval_secs
             || self.scan_control_state.auto_scan_interval_secs != self.prev_auto_scan_interval_secs
+            || self.scan_control_state.identification_timeout_secs
+                != self.prev_identification_timeout_secs
+            || self.scan_control_state.connectivity_timeout_secs
+                != self.prev_connectivity_timeout_secs
+            || self.scan_control_state.connectivity_retries != self.prev_connectivity_retries
         {
             self.prev_detail_refresh_interval_secs = self.detail_refresh_interval_secs;
             self.prev_auto_scan_interval_secs = self.scan_control_state.auto_scan_interval_secs;
+            self.prev_identification_timeout_secs =
+                self.scan_control_state.identification_timeout_secs;
+            self.prev_connectivity_timeout_secs = self.scan_control_state.connectivity_timeout_secs;
+            self.prev_connectivity_retries = self.scan_control_state.connectivity_retries;
             self.save_config();
         }
 
