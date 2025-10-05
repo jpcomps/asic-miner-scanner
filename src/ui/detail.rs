@@ -1,4 +1,4 @@
-use crate::models::{MinerInfo, RecordingState};
+use crate::models::{MetricsHistory, MinerInfo, RecordingState};
 use asic_rs::MinerFactory;
 use eframe::egui;
 use egui::Color32;
@@ -11,7 +11,7 @@ pub fn draw_miner_detail_modal(
     detail_view_miners: &mut Vec<MinerInfo>,
     miners_arc: Arc<Mutex<Vec<MinerInfo>>>,
     detail_refresh_times: &mut HashMap<String, Instant>,
-    detail_metrics_history: &mut HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    detail_metrics_history: &mut HashMap<String, MetricsHistory>,
     recording_states: &mut HashMap<String, RecordingState>,
     detail_refresh_interval_secs: &mut u64,
 ) {
@@ -318,7 +318,7 @@ fn draw_controls_and_graphs(
     miner: &MinerInfo,
     miners_arc: Arc<Mutex<Vec<MinerInfo>>>,
     detail_refresh_times: &mut HashMap<String, Instant>,
-    detail_metrics_history: &mut HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    detail_metrics_history: &mut HashMap<String, MetricsHistory>,
     recording_states: &mut HashMap<String, RecordingState>,
     detail_refresh_interval_secs: &mut u64,
 ) {
@@ -669,7 +669,7 @@ fn draw_control_buttons(
                 }
 
                 ui.label(
-                    egui::RichText::new(format!("📊 {}:{:02} ({} rows)", mins, secs, row_count))
+                    egui::RichText::new(format!("📊 {mins}:{secs:02} ({row_count} rows)"))
                         .color(Color32::from_rgb(255, 100, 100))
                         .size(14.0),
                 );
@@ -716,7 +716,7 @@ fn draw_control_buttons(
                         // Open file dialog
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("CSV", &["csv"])
-                            .set_file_name(&format!("miner_{}.csv", miner.ip.replace(".", "_")))
+                            .set_file_name(format!("miner_{}.csv", miner.ip.replace(".", "_")))
                             .save_file()
                         {
                             if let Some(recording) = recording_states.get(&miner.ip) {
@@ -724,7 +724,7 @@ fn draw_control_buttons(
                                     recording,
                                     path.to_str().unwrap(),
                                 ) {
-                                    Ok(_) => println!("✓ Exported recording to: {:?}", path),
+                                    Ok(_) => println!("✓ Exported recording to: {path:?}"),
                                     Err(e) => eprintln!("✗ Failed to export: {e}"),
                                 }
                             }
@@ -732,7 +732,7 @@ fn draw_control_buttons(
                     }
 
                     ui.label(
-                        egui::RichText::new(format!("📁 {} rows ready", row_count))
+                        egui::RichText::new(format!("📁 {row_count} rows ready"))
                             .color(Color32::from_rgb(150, 150, 150))
                             .size(14.0),
                     );
@@ -745,7 +745,7 @@ fn draw_control_buttons(
 fn draw_metrics_graphs(
     ui: &mut egui::Ui,
     miner: &MinerInfo,
-    detail_metrics_history: &HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    detail_metrics_history: &HashMap<String, MetricsHistory>,
 ) {
     let history = detail_metrics_history.get(&miner.ip);
 
@@ -757,7 +757,7 @@ fn draw_metrics_graphs(
         ui.add_space(5.0);
 
         if !history_data.is_empty() {
-            use chrono::{DateTime, Local, TimeZone};
+            use chrono::{Local, TimeZone};
 
             let num_boards = history_data
                 .first()
@@ -956,7 +956,7 @@ fn draw_metrics_graphs(
                         } else {
                             0.0
                         };
-                        ui.label(format!("Current: {:.2} W/TH", current_eff));
+                        ui.label(format!("Current: {current_eff:.2} W/TH"));
                     }
                 }
             });

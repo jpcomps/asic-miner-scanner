@@ -6,7 +6,7 @@ mod ui;
 
 use eframe::egui;
 use egui::Color32;
-use models::{MinerInfo, SavedRange, ScanProgress, SortColumn, SortDirection};
+use models::{MetricsHistory, MinerInfo, SavedRange, ScanProgress, SortColumn, SortDirection};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,7 +38,7 @@ struct MinerScannerApp {
     selected_miners: HashSet<String>,
     detail_view_miners: Vec<MinerInfo>,
     detail_refresh_times: HashMap<String, Instant>,
-    detail_metrics_history: HashMap<String, Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>>,
+    detail_metrics_history: HashMap<String, MetricsHistory>,
     search_query: String,
     scan_control_state: ScanControlState,
     recording_states: HashMap<String, models::RecordingState>, // IP -> RecordingState
@@ -313,7 +313,7 @@ impl eframe::App for MinerScannerApp {
                                 ui::draw_scan_and_ranges_card(
                                     ui,
                                     &mut self.scan_control_state,
-                                    &mut self.saved_ranges,
+                                    &self.saved_ranges,
                                     Arc::clone(&self.scan_progress),
                                     &mut on_scan_clicked,
                                     &mut on_save_range_clicked,

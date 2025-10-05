@@ -23,7 +23,10 @@ pub fn start_recording(miner: &MinerInfo) -> Result<RecordingState, std::io::Err
     let model_clean = miner.model.replace(" ", "");
     let filename = format!(
         "recording_{}_{}_{}_{}.csv",
-        miner.ip, model_clean, miner.mac_address().unwrap_or_else(|| "unknown".to_string()), timestamp
+        miner.ip,
+        model_clean,
+        miner.mac_address().unwrap_or_else(|| "unknown".to_string()),
+        timestamp
     );
 
     let file_path = recordings_dir.join(filename);
@@ -56,15 +59,15 @@ pub fn append_data_point(
         None => return Ok(()), // No data to record
     };
 
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&recording.file_path)?;
+    let mut file = OpenOptions::new().append(true).open(&recording.file_path)?;
 
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
 
     // Extract total hashrate
     let total_hashrate = if let Some(hr) = &data.hashrate {
-        let converted = hr.clone().as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
+        let converted = hr
+            .clone()
+            .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
         let display_str = format!("{converted}");
         display_str
             .split_whitespace()
@@ -93,19 +96,25 @@ pub fn append_data_point(
     };
 
     // Extract per-board hashrates (up to 4 boards)
-    let mut board_hashrates = vec![0.0; 4];
+    let mut board_hashrates = [0.0; 4];
     for (i, board) in data.hashboards.iter().take(4).enumerate() {
         if let Some(hr) = &board.hashrate {
-            let converted = hr.clone().as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
+            let converted = hr
+                .clone()
+                .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
             let display_str = format!("{converted}");
-            if let Some(val) = display_str.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()) {
+            if let Some(val) = display_str
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<f64>().ok())
+            {
                 board_hashrates[i] = val;
             }
         }
     }
 
     // Extract per-board temperatures (up to 4 boards)
-    let mut board_temps = vec![0.0; 4];
+    let mut board_temps = [0.0; 4];
     for (i, board) in data.hashboards.iter().take(4).enumerate() {
         if let Some(temp) = board.board_temperature {
             board_temps[i] = temp.as_celsius();
@@ -113,7 +122,7 @@ pub fn append_data_point(
     }
 
     // Extract fan speeds (up to 4 fans)
-    let mut fan_rpms = vec![0.0; 4];
+    let mut fan_rpms = [0.0; 4];
     for (i, fan) in data.fans.iter().take(4).enumerate() {
         if let Some(rpm) = fan.rpm {
             let rpm_value = rpm.as_radians_per_second() * 60.0 / (2.0 * std::f64::consts::PI);
@@ -156,7 +165,10 @@ pub fn stop_recording(recording: &mut RecordingState) {
     recording.is_recording = false;
 }
 
-pub fn export_recording(recording: &RecordingState, destination: &str) -> Result<(), std::io::Error> {
+pub fn export_recording(
+    recording: &RecordingState,
+    destination: &str,
+) -> Result<(), std::io::Error> {
     std::fs::copy(&recording.file_path, destination)?;
     Ok(())
 }
@@ -169,6 +181,8 @@ pub fn delete_recording(recording: &RecordingState) -> Result<(), std::io::Error
 // Helper extension for MinerInfo
 impl MinerInfo {
     pub fn mac_address(&self) -> Option<String> {
-        self.full_data.as_ref().and_then(|d| d.mac.map(|m| m.to_string()))
+        self.full_data
+            .as_ref()
+            .and_then(|d| d.mac.map(|m| m.to_string()))
     }
 }

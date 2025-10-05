@@ -24,6 +24,7 @@ pub struct SavedRange {
     pub range: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct HashratePoint {
     pub timestamp: f64,
@@ -60,6 +61,9 @@ pub enum SortDirection {
 }
 
 pub const MAX_HISTORY_POINTS: usize = 288; // 24 hours at 5-min intervals
+
+// Type alias for metrics history: (timestamp, total_hashrate, power, board_hashrates, avg_temp, board_temps)
+pub type MetricsHistory = Vec<(f64, f64, f64, Vec<f64>, f64, Vec<f64>)>;
 
 #[derive(Clone, Debug)]
 pub struct RecordingState {

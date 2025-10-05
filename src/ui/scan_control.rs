@@ -13,10 +13,11 @@ pub struct ScanControlState {
     pub last_scan_time: Option<Instant>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_scan_and_ranges_card(
     ui: &mut egui::Ui,
     state: &mut ScanControlState,
-    saved_ranges: &mut Vec<SavedRange>,
+    saved_ranges: &[SavedRange],
     scan_progress: Arc<Mutex<ScanProgress>>,
     on_scan_clicked: &mut bool,
     on_save_range_clicked: &mut bool,
@@ -94,10 +95,7 @@ pub fn draw_scan_and_ranges_card(
                     .corner_radius(4.0)
                     .min_size(Vec2::new(120.0, 28.0));
 
-                    if ui
-                        .add_enabled(!saved_ranges.is_empty(), scan_btn)
-                        .clicked()
-                    {
+                    if ui.add_enabled(!saved_ranges.is_empty(), scan_btn).clicked() {
                         *on_scan_clicked = true;
                     }
 
@@ -237,30 +235,27 @@ pub fn draw_scan_and_ranges_card(
                                 .monospace(),
                         );
 
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .button(
-                                        egui::RichText::new("✕")
-                                            .color(Color32::from_rgb(255, 100, 100)),
-                                    )
-                                    .clicked()
-                                {
-                                    *range_to_remove = Some(idx);
-                                }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(
+                                    egui::RichText::new("✕")
+                                        .color(Color32::from_rgb(255, 100, 100)),
+                                )
+                                .clicked()
+                            {
+                                *range_to_remove = Some(idx);
+                            }
 
-                                if ui
-                                    .button(
-                                        egui::RichText::new("Load")
-                                            .color(Color32::from_rgb(100, 200, 255)),
-                                    )
-                                    .clicked()
-                                {
-                                    *range_to_load = Some(range.clone());
-                                }
-                            },
-                        );
+                            if ui
+                                .button(
+                                    egui::RichText::new("Load")
+                                        .color(Color32::from_rgb(100, 200, 255)),
+                                )
+                                .clicked()
+                            {
+                                *range_to_load = Some(range.clone());
+                            }
+                        });
                     });
                 }
             });

@@ -5,6 +5,7 @@ use egui::{Color32, FontId};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_miners_table(
     ui: &mut egui::Ui,
     miners: &[MinerInfo],
@@ -218,9 +219,9 @@ pub fn draw_miners_table(
                                         "✓ Set fault light to {} on: {ip_clone}",
                                         if new_state { "ON" } else { "OFF" }
                                     ),
-                                    Err(e) => eprintln!(
-                                        "✗ Failed to set fault light on {ip_clone}: {e}"
-                                    ),
+                                    Err(e) => {
+                                        eprintln!("✗ Failed to set fault light on {ip_clone}: {e}")
+                                    }
                                 }
                             }
                         });
@@ -582,9 +583,7 @@ pub fn draw_miners_table(
                                                     .button(
                                                         egui::RichText::new(&miner.ip)
                                                             .size(11.0)
-                                                            .color(Color32::from_rgb(
-                                                                100, 200, 255,
-                                                            ))
+                                                            .color(Color32::from_rgb(100, 200, 255))
                                                             .monospace(),
                                                     )
                                                     .on_hover_text("Click to view details")
