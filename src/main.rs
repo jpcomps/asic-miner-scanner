@@ -412,6 +412,7 @@ impl eframe::App for MinerScannerApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(20.0);
+
                         let miners_count = self.miners.lock().unwrap().len();
                         ui.label(
                             egui::RichText::new(format!("MINERS FOUND: {miners_count}"))

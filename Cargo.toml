@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eframe = "0.32"
-egui = "0.32"
-egui_extras = { version = "0.32", features = ["default", "image"] }
+eframe = "0.33"
+egui = "0.33"
+egui_extras = { version = "0.33", features = ["default", "image"] }
 resvg = "0.45"
 usvg = "0.45"
 tiny-skia = "0.11"
-egui_plot = "0.33"
+egui_plot = "0.34"
 #asic-rs = "0.1"
 asic-rs = { git = "https://github.com/256-Foundation/asic-rs" }
 tokio = { version = "1.47", features = ["full"] }
