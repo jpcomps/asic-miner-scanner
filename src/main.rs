@@ -13,6 +13,26 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ui::ScanControlState;
 
 fn main() -> Result<(), eframe::Error> {
+    // Auto-increase ulimit to max on Unix systems (do once at startup)
+    #[cfg(unix)]
+    {
+        use rlimit::Resource;
+
+        if let Ok((soft, hard)) = Resource::NOFILE.get() {
+            if soft < hard {
+                // Increase soft limit to hard limit (maximum allowed)
+                match Resource::NOFILE.set(hard, hard) {
+                    Ok(_) => {
+                        println!("✓ Increased file descriptor limit from {soft} to {hard}");
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  WARNING: Could not increase file descriptor limit from {soft} to {hard}: {e}");
+                    }
+                }
+            }
+        }
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
