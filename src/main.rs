@@ -140,6 +140,24 @@ impl MinerScannerApp {
         let mut miners = self.miners.lock().unwrap();
         let direction = self.sort_direction;
 
+        // Helper function to extract numeric value from a string
+        fn extract_numeric(s: &str) -> f64 {
+            // First try splitting on whitespace (for "10.5 TH/s")
+            if let Some(num_str) = s.split_whitespace().next() {
+                if let Ok(val) = num_str.parse::<f64>() {
+                    return val;
+                }
+            }
+
+            // If that fails, try parsing just the leading numeric part (for "25.3°C")
+            let numeric_part: String = s
+                .chars()
+                .take_while(|c| c.is_numeric() || *c == '.' || *c == '-')
+                .collect();
+
+            numeric_part.parse::<f64>().unwrap_or(0.0)
+        }
+
         miners.sort_by(|a, b| {
             let cmp = match column {
                 SortColumn::Ip => a.ip.cmp(&b.ip),
@@ -147,11 +165,21 @@ impl MinerScannerApp {
                 SortColumn::Model => a.model.cmp(&b.model),
                 SortColumn::Firmware => a.firmware_version.cmp(&b.firmware_version),
                 SortColumn::ControlBoard => a.control_board.cmp(&b.control_board),
-                SortColumn::Hashrate => a.hashrate.cmp(&b.hashrate),
-                SortColumn::Wattage => a.wattage.cmp(&b.wattage),
-                SortColumn::Efficiency => a.efficiency.cmp(&b.efficiency),
-                SortColumn::Temperature => a.temperature.cmp(&b.temperature),
-                SortColumn::FanSpeed => a.fan_speed.cmp(&b.fan_speed),
+                SortColumn::Hashrate => extract_numeric(&a.hashrate)
+                    .partial_cmp(&extract_numeric(&b.hashrate))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::Wattage => extract_numeric(&a.wattage)
+                    .partial_cmp(&extract_numeric(&b.wattage))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::Efficiency => extract_numeric(&a.efficiency)
+                    .partial_cmp(&extract_numeric(&b.efficiency))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::Temperature => extract_numeric(&a.temperature)
+                    .partial_cmp(&extract_numeric(&b.temperature))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                SortColumn::FanSpeed => extract_numeric(&a.fan_speed)
+                    .partial_cmp(&extract_numeric(&b.fan_speed))
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortColumn::Pool => a.pool.cmp(&b.pool),
                 SortColumn::Worker => a.worker.cmp(&b.worker),
             };

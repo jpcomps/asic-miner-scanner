@@ -96,188 +96,194 @@ pub fn scan_ranges(
                             .scan_by_range(&range)
                             .await
                         {
-                Ok(discovered_miners) => {
-                    for miner in discovered_miners {
-                        let ip = miner.get_ip().to_string();
+                            Ok(discovered_miners) => {
+                                for miner in discovered_miners {
+                                    let ip = miner.get_ip().to_string();
 
-                        {
-                            let mut progress = scan_progress.lock().unwrap();
-                            progress.current_ip = ip.clone();
-                        }
-
-                        let data = miner.get_data().await;
-
-                        // Extract hashrate value for efficiency calculation
-                        let hashrate_th = data.hashrate.as_ref().map(|hr| {
-                            hr.clone()
-                                .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash)
-                        });
-
-                        // Extract wattage (power) and efficiency
-                        let wattage_str = if let Some(wattage) = data.wattage {
-                            format!("{:.0} W", wattage.as_watts())
-                        } else {
-                            "N/A".to_string()
-                        };
-
-                        let efficiency_str = if let Some(efficiency) = data.efficiency {
-                            format!("{efficiency:.1}")
-                        } else {
-                            "N/A".to_string()
-                        };
-
-                        let miner_info = MinerInfo {
-                            ip: ip.clone(),
-                            hostname: data
-                                .hostname
-                                .clone()
-                                .unwrap_or_else(|| "N/A".to_string()),
-                            model: data.device_info.model.to_string(),
-                            firmware_version: data
-                                .firmware_version
-                                .clone()
-                                .unwrap_or_else(|| "N/A".to_string()),
-                            control_board: data
-                                .control_board_version
-                                .as_ref()
-                                .map(|cb| format!("{cb:?}"))
-                                .unwrap_or_else(|| "N/A".to_string()),
-                            hashrate: match hashrate_th {
-                                Some(hr) => {
-                                    let value_str = format!("{hr}");
-                                    if let Some(val) = value_str.split_whitespace().next() {
-                                        if let Ok(num) = val.parse::<f64>() {
-                                            format!("{:.2}", num)
-                                        } else {
-                                            value_str
-                                        }
-                                    } else {
-                                        value_str
+                                    {
+                                        let mut progress = scan_progress.lock().unwrap();
+                                        progress.current_ip = ip.clone();
                                     }
-                                }
-                                None => "N/A".to_string(),
-                            },
-                            wattage: wattage_str,
-                            efficiency: efficiency_str,
-                            temperature: {
-                                if let Some(temp) = data.average_temperature {
-                                    format!("{:.1}°C", temp.as_celsius())
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            fan_speed: {
-                                if !data.fans.is_empty() {
-                                    let rpms: Vec<f64> = data
-                                        .fans
-                                        .iter()
-                                        .filter_map(|fan| fan.rpm)
-                                        .map(|rpm| {
-                                            rpm.as_radians_per_second() * 60.0
-                                                / (2.0 * std::f64::consts::PI)
-                                        })
-                                        .collect();
 
-                                    if !rpms.is_empty() {
-                                        let avg_rpm =
-                                            rpms.iter().sum::<f64>() / rpms.len() as f64;
-                                        format!("{avg_rpm:.0} RPM")
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            pool: {
-                                if !data.pools.is_empty() {
-                                    if let Some(url) = &data.pools[0].url {
-                                        url.to_string()
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            worker: {
-                                if !data.pools.is_empty() {
-                                    if let Some(user) = &data.pools[0].user {
-                                        user.to_string()
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            light_flashing: data.light_flashing.unwrap_or(false),
-                            full_data: Some(data.clone()),
-                        };
+                                    let data = miner.get_data().await;
 
-                        // Record hashrate history (thread-safe)
-                        {
-                            if let Some(hashrate_val) =
-                                miner_info.hashrate.split_whitespace().next()
-                            {
-                                if let Ok(hashrate) = hashrate_val.parse::<f64>() {
-                                    let timestamp = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs_f64();
-
-                                    let mut history_map = hashrate_history.lock().unwrap();
-                                    let history =
-                                        history_map.entry(miner_info.ip.clone()).or_default();
-                                    history.push(HashratePoint {
-                                        timestamp,
-                                        hashrate,
+                                    // Extract hashrate value for efficiency calculation
+                                    let hashrate_th = data.hashrate.as_ref().map(|hr| {
+                                        hr.clone().as_unit(
+                                            asic_rs::data::hashrate::HashRateUnit::TeraHash,
+                                        )
                                     });
 
-                                    // Keep only last MAX_HISTORY_POINTS
-                                    if history.len() > crate::models::MAX_HISTORY_POINTS {
-                                        history.drain(
-                                            0..history.len()
-                                                - crate::models::MAX_HISTORY_POINTS,
-                                        );
+                                    // Extract wattage (power) and efficiency
+                                    let wattage_str = if let Some(wattage) = data.wattage {
+                                        format!("{:.0} W", wattage.as_watts())
+                                    } else {
+                                        "N/A".to_string()
+                                    };
+
+                                    let efficiency_str = if let Some(efficiency) = data.efficiency {
+                                        format!("{efficiency:.1}")
+                                    } else {
+                                        "N/A".to_string()
+                                    };
+
+                                    let miner_info = MinerInfo {
+                                        ip: ip.clone(),
+                                        hostname: data
+                                            .hostname
+                                            .clone()
+                                            .unwrap_or_else(|| "N/A".to_string()),
+                                        model: data.device_info.model.to_string(),
+                                        firmware_version: data
+                                            .firmware_version
+                                            .clone()
+                                            .unwrap_or_else(|| "N/A".to_string()),
+                                        control_board: data
+                                            .control_board_version
+                                            .as_ref()
+                                            .map(|cb| format!("{cb:?}"))
+                                            .unwrap_or_else(|| "N/A".to_string()),
+                                        hashrate: match hashrate_th {
+                                            Some(hr) => {
+                                                let value_str = format!("{hr}");
+                                                if let Some(val) =
+                                                    value_str.split_whitespace().next()
+                                                {
+                                                    if let Ok(num) = val.parse::<f64>() {
+                                                        format!("{:.2}", num)
+                                                    } else {
+                                                        value_str
+                                                    }
+                                                } else {
+                                                    value_str
+                                                }
+                                            }
+                                            None => "N/A".to_string(),
+                                        },
+                                        wattage: wattage_str,
+                                        efficiency: efficiency_str,
+                                        temperature: {
+                                            if let Some(temp) = data.average_temperature {
+                                                format!("{:.1}°C", temp.as_celsius())
+                                            } else {
+                                                "N/A".to_string()
+                                            }
+                                        },
+                                        fan_speed: {
+                                            if !data.fans.is_empty() {
+                                                let rpms: Vec<f64> = data
+                                                    .fans
+                                                    .iter()
+                                                    .filter_map(|fan| fan.rpm)
+                                                    .map(|rpm| {
+                                                        rpm.as_radians_per_second() * 60.0
+                                                            / (2.0 * std::f64::consts::PI)
+                                                    })
+                                                    .collect();
+
+                                                if !rpms.is_empty() {
+                                                    let avg_rpm = rpms.iter().sum::<f64>()
+                                                        / rpms.len() as f64;
+                                                    format!("{avg_rpm:.0} RPM")
+                                                } else {
+                                                    "N/A".to_string()
+                                                }
+                                            } else {
+                                                "N/A".to_string()
+                                            }
+                                        },
+                                        pool: {
+                                            if !data.pools.is_empty() {
+                                                if let Some(url) = &data.pools[0].url {
+                                                    url.to_string()
+                                                } else {
+                                                    "N/A".to_string()
+                                                }
+                                            } else {
+                                                "N/A".to_string()
+                                            }
+                                        },
+                                        worker: {
+                                            if !data.pools.is_empty() {
+                                                if let Some(user) = &data.pools[0].user {
+                                                    user.to_string()
+                                                } else {
+                                                    "N/A".to_string()
+                                                }
+                                            } else {
+                                                "N/A".to_string()
+                                            }
+                                        },
+                                        light_flashing: data.light_flashing.unwrap_or(false),
+                                        full_data: Some(data.clone()),
+                                    };
+
+                                    // Record hashrate history (thread-safe)
+                                    {
+                                        if let Some(hashrate_val) =
+                                            miner_info.hashrate.split_whitespace().next()
+                                        {
+                                            if let Ok(hashrate) = hashrate_val.parse::<f64>() {
+                                                let timestamp = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .unwrap()
+                                                    .as_secs_f64();
+
+                                                let mut history_map =
+                                                    hashrate_history.lock().unwrap();
+                                                let history = history_map
+                                                    .entry(miner_info.ip.clone())
+                                                    .or_default();
+                                                history.push(HashratePoint {
+                                                    timestamp,
+                                                    hashrate,
+                                                });
+
+                                                // Keep only last MAX_HISTORY_POINTS
+                                                if history.len() > crate::models::MAX_HISTORY_POINTS
+                                                {
+                                                    history.drain(
+                                                        0..history.len()
+                                                            - crate::models::MAX_HISTORY_POINTS,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Use IP as key to deduplicate (thread-safe)
+                                    {
+                                        let mut miners_map = new_miners.lock().unwrap();
+                                        miners_map.insert(miner_info.ip.clone(), miner_info);
+
+                                        // Update progress with current count
+                                        let mut progress = scan_progress.lock().unwrap();
+                                        progress.found_miners = miners_map.len();
                                     }
                                 }
                             }
+                            Err(e) => {
+                                eprintln!("Scan error for range {}: {e:?}", range);
+                            }
                         }
 
-                        // Use IP as key to deduplicate (thread-safe)
+                        // Increment scanned ranges after this range completes
                         {
-                            let mut miners_map = new_miners.lock().unwrap();
-                            miners_map.insert(miner_info.ip.clone(), miner_info);
-
-                            // Update progress with current count
                             let mut progress = scan_progress.lock().unwrap();
-                            progress.found_miners = miners_map.len();
+                            progress.scanned_ranges += 1;
                         }
+                    });
+
+                    handles.push(handle);
+                }
+
+                // Wait for all tasks in this chunk to complete
+                for handle in handles {
+                    if let Err(e) = handle.await {
+                        eprintln!("Task join error: {e:?}");
                     }
                 }
-                Err(e) => {
-                    eprintln!("Scan error for range {}: {e:?}", range);
-                }
             }
-
-            // Increment scanned ranges after this range completes
-            {
-                let mut progress = scan_progress.lock().unwrap();
-                progress.scanned_ranges += 1;
-            }
-        });
-
-        handles.push(handle);
-    }
-
-    // Wait for all tasks in this chunk to complete
-    for handle in handles {
-        if let Err(e) = handle.await {
-            eprintln!("Task join error: {e:?}");
-        }
-    }
-}
 
             // Atomically replace miners list with new data (convert HashMap to Vec)
             {
