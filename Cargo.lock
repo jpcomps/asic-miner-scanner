@@ -285,7 +285,7 @@ dependencies = [
 [[package]]
 name = "asic-rs"
 version = "0.1.4"
-source = "git+https://github.com/256-Foundation/asic-rs#508d45f33090cd1121dcdf4912768c832384ffd2"
+source = "git+https://github.com/256-Foundation/asic-rs#e805183d0b7f616cd48a509f8444a48aafb0ea77"
 dependencies = [
  "aes",
  "anyhow",
@@ -1987,7 +1987,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
