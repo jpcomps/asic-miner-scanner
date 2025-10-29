@@ -285,7 +285,6 @@ dependencies = [
 [[package]]
 name = "asic-rs"
 version = "0.1.4"
-source = "git+https://github.com/256-Foundation/asic-rs#046ca0be615112802ebf4fb71d39b536afe2de3b"
 dependencies = [
  "aes",
  "anyhow",

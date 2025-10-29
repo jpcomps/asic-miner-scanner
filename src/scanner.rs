@@ -32,11 +32,20 @@ pub fn parse_ip_range(start: &str, end: &str) -> Result<String, String> {
         return Err("Start IP must be less than or equal to end IP".to_string());
     }
 
-    // Format: "192.168.1.1-254" for asic-rs
-    let range = format!(
-        "{}.{}.{}.{}-{}",
-        start_parts[0], start_parts[1], start_parts[2], start_last, end_last
-    );
+    // Format: "192.168.1.1-254" for asic-rs, or "192.168.1.1" if single IP
+    let range = if start_last == end_last {
+        // Single IP, no range needed
+        format!(
+            "{}.{}.{}.{}",
+            start_parts[0], start_parts[1], start_parts[2], start_last
+        )
+    } else {
+        // Range format
+        format!(
+            "{}.{}.{}.{}-{}",
+            start_parts[0], start_parts[1], start_parts[2], start_last, end_last
+        )
+    };
 
     Ok(range)
 }
@@ -75,27 +84,27 @@ pub fn scan_ranges(
             let new_miners = Arc::new(Mutex::new(HashMap::<String, MinerInfo>::new()));
 
             // Build a single MinerFactory and add all ranges
-            let factory = ranges.iter().try_fold(
-                MinerFactory::new()
-                    .with_identification_timeout_secs(identification_timeout_secs)
-                    .with_connectivity_timeout_secs(connectivity_timeout_secs)
-                    .with_connectivity_retries(connectivity_retries)
-                    .with_port_check(true),
-                |factory, range| {
-                    factory.with_range(range).map_err(|e| {
-                        eprintln!("Failed to add range {}: {e:?}", range);
-                        e
-                    })
-                },
-            );
+            let mut factory = MinerFactory::new()
+                .with_identification_timeout_secs(identification_timeout_secs)
+                .with_connectivity_timeout_secs(connectivity_timeout_secs)
+                .with_connectivity_retries(connectivity_retries)
+                .with_port_check(true);
 
-            let mut factory = match factory {
-                Ok(f) => f,
-                Err(_) => {
-                    eprintln!("Failed to initialize scanner with ranges");
-                    return;
+            // Add all ranges to the factory
+            for range in &ranges {
+                match factory.with_range(range) {
+                    Ok(f) => {
+                        factory = f;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to add range {}: {e:?}", range);
+                        // On error, factory is consumed so we must stop
+                        let mut progress = scan_progress.lock().unwrap();
+                        progress.scanning = false;
+                        return;
+                    }
                 }
-            };
+            }
 
             // Enable adaptive concurrency and scan all ranges at once
             factory.update_adaptive_concurrency();
@@ -103,14 +112,14 @@ pub fn scan_ranges(
             match factory.scan().await {
                 Ok(discovered_miners) => {
                     for miner in discovered_miners {
-                                let ip = miner.get_ip().to_string();
+                        let ip = miner.get_ip().to_string();
 
-                                {
-                                    let mut progress = scan_progress.lock().unwrap();
-                                    progress.current_ip = ip.clone();
-                                }
+                        {
+                            let mut progress = scan_progress.lock().unwrap();
+                            progress.current_ip = ip.clone();
+                        }
 
-                                let data = miner.get_data().await;
+                        let data = miner.get_data().await;
 
                         // Extract hashrate value for efficiency calculation
                         let hashrate_th = data.hashrate.as_ref().map(|hr| {
