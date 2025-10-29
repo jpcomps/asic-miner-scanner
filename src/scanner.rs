@@ -123,9 +123,8 @@ pub fn scan_ranges(
 
                         // Extract hashrate value for efficiency calculation
                         let hashrate_th = data.hashrate.as_ref().map(|hr| {
-                            hr.clone().as_unit(
-                                asic_rs::data::hashrate::HashRateUnit::TeraHash,
-                            )
+                            hr.clone()
+                                .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash)
                         });
 
                         // Extract wattage (power) and efficiency
@@ -143,10 +142,7 @@ pub fn scan_ranges(
 
                         let miner_info = MinerInfo {
                             ip: ip.clone(),
-                            hostname: data
-                                .hostname
-                                .clone()
-                                .unwrap_or_else(|| "N/A".to_string()),
+                            hostname: data.hostname.clone().unwrap_or_else(|| "N/A".to_string()),
                             model: data.device_info.model.to_string(),
                             firmware_version: data
                                 .firmware_version
@@ -160,9 +156,7 @@ pub fn scan_ranges(
                             hashrate: match hashrate_th {
                                 Some(hr) => {
                                     let value_str = format!("{hr}");
-                                    if let Some(val) =
-                                        value_str.split_whitespace().next()
-                                    {
+                                    if let Some(val) = value_str.split_whitespace().next() {
                                         if let Ok(num) = val.parse::<f64>() {
                                             format!("{:.2}", num)
                                         } else {
@@ -196,8 +190,7 @@ pub fn scan_ranges(
                                         .collect();
 
                                     if !rpms.is_empty() {
-                                        let avg_rpm = rpms.iter().sum::<f64>()
-                                            / rpms.len() as f64;
+                                        let avg_rpm = rpms.iter().sum::<f64>() / rpms.len() as f64;
                                         format!("{avg_rpm:.0} RPM")
                                     } else {
                                         "N/A".to_string()
@@ -243,22 +236,18 @@ pub fn scan_ranges(
                                         .unwrap()
                                         .as_secs_f64();
 
-                                    let mut history_map =
-                                        hashrate_history.lock().unwrap();
-                                    let history = history_map
-                                        .entry(miner_info.ip.clone())
-                                        .or_default();
+                                    let mut history_map = hashrate_history.lock().unwrap();
+                                    let history =
+                                        history_map.entry(miner_info.ip.clone()).or_default();
                                     history.push(HashratePoint {
                                         timestamp,
                                         hashrate,
                                     });
 
                                     // Keep only last MAX_HISTORY_POINTS
-                                    if history.len() > crate::models::MAX_HISTORY_POINTS
-                                    {
+                                    if history.len() > crate::models::MAX_HISTORY_POINTS {
                                         history.drain(
-                                            0..history.len()
-                                                - crate::models::MAX_HISTORY_POINTS,
+                                            0..history.len() - crate::models::MAX_HISTORY_POINTS,
                                         );
                                     }
                                 }
