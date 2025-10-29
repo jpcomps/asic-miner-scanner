@@ -74,26 +74,35 @@ pub fn scan_ranges(
             // Thread-safe shared HashMap for collecting results from parallel scans
             let new_miners = Arc::new(Mutex::new(HashMap::<String, MinerInfo>::new()));
 
-            // Scan all ranges concurrently using join handles
-            let mut handles = vec![];
+            // Build a single MinerFactory and add all ranges
+            let factory = ranges.iter().try_fold(
+                MinerFactory::new()
+                    .with_identification_timeout_secs(identification_timeout_secs)
+                    .with_connectivity_timeout_secs(connectivity_timeout_secs)
+                    .with_connectivity_retries(connectivity_retries)
+                    .with_port_check(true),
+                |factory, range| {
+                    factory.with_range(range).map_err(|e| {
+                        eprintln!("Failed to add range {}: {e:?}", range);
+                        e
+                    })
+                },
+            );
 
-            for range in ranges {
-                let new_miners = Arc::clone(&new_miners);
-                let scan_progress = Arc::clone(&scan_progress);
-                let hashrate_history = Arc::clone(&hashrate_history);
+            let mut factory = match factory {
+                Ok(f) => f,
+                Err(_) => {
+                    eprintln!("Failed to initialize scanner with ranges");
+                    return;
+                }
+            };
 
-                let handle = tokio::spawn(async move {
-                    match MinerFactory::new()
-                        .with_adaptive_concurrency()
-                        .with_identification_timeout_secs(identification_timeout_secs)
-                        .with_connectivity_timeout_secs(connectivity_timeout_secs)
-                        .with_connectivity_retries(connectivity_retries)
-                        .with_port_check(true)
-                        .scan_by_range(&range)
-                        .await
-                    {
-                        Ok(discovered_miners) => {
-                            for miner in discovered_miners {
+            // Enable adaptive concurrency and scan all ranges at once
+            factory.update_adaptive_concurrency();
+
+            match factory.scan().await {
+                Ok(discovered_miners) => {
+                    for miner in discovered_miners {
                                 let ip = miner.get_ip().to_string();
 
                                 {
@@ -247,37 +256,26 @@ pub fn scan_ranges(
                             }
                         }
 
-                                // Use IP as key to deduplicate (thread-safe)
-                                {
-                                    let mut miners_map = new_miners.lock().unwrap();
-                                    miners_map.insert(miner_info.ip.clone(), miner_info);
+                        // Use IP as key to deduplicate (thread-safe)
+                        {
+                            let mut miners_map = new_miners.lock().unwrap();
+                            miners_map.insert(miner_info.ip.clone(), miner_info);
 
-                                    // Update progress with current count
-                                    let mut progress = scan_progress.lock().unwrap();
-                                    progress.found_miners = miners_map.len();
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Scan error for range {}: {e:?}", range);
+                            // Update progress with current count
+                            let mut progress = scan_progress.lock().unwrap();
+                            progress.found_miners = miners_map.len();
                         }
                     }
-
-                    // Mark this range as scanned
-                    {
-                        let mut progress = scan_progress.lock().unwrap();
-                        progress.scanned_ranges += 1;
-                    }
-                });
-
-                handles.push(handle);
+                }
+                Err(e) => {
+                    eprintln!("Scan error: {e:?}");
+                }
             }
 
-            // Wait for all ranges to complete
-            for handle in handles {
-                if let Err(e) = handle.await {
-                    eprintln!("Task join error: {e:?}");
-                }
+            // Mark all ranges as scanned
+            {
+                let mut progress = scan_progress.lock().unwrap();
+                progress.scanned_ranges = ranges.len();
             }
 
             // Atomically replace miners list with new data (convert HashMap to Vec)
