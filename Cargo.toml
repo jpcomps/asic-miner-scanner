@@ -19,7 +19,7 @@ serde_json = "1.0"
 webbrowser = "1.0"
 csv = "1.4"
 chrono = "0.4"
-rfd = "0.15"
+rfd = "0.16"
 dirs = "6.0"
 
 [target.'cfg(unix)'.dependencies]
