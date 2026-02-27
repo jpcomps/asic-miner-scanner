@@ -1,32 +1,29 @@
 use crate::models::{HashratePoint, MinerInfo, ScanProgress};
 use asic_rs::MinerFactory;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn parse_ip_range(start: &str, end: &str) -> Result<String, String> {
-    let start_parts: Vec<&str> = start.split('.').collect();
-    let end_parts: Vec<&str> = end.split('.').collect();
+    let start_addr = start
+        .parse::<Ipv4Addr>()
+        .map_err(|_| "Invalid start IP address".to_string())?;
+    let end_addr = end
+        .parse::<Ipv4Addr>()
+        .map_err(|_| "Invalid end IP address".to_string())?;
 
-    if start_parts.len() != 4 || end_parts.len() != 4 {
-        return Err("Invalid IP address format".to_string());
-    }
+    let start_octets = start_addr.octets();
+    let end_octets = end_addr.octets();
 
     // Verify first three octets match
-    if start_parts[0] != end_parts[0]
-        || start_parts[1] != end_parts[1]
-        || start_parts[2] != end_parts[2]
-    {
+    if start_octets[..3] != end_octets[..3] {
         return Err("IP ranges must be in the same subnet (first 3 octets must match)".to_string());
     }
 
-    let start_last: u8 = start_parts[3]
-        .parse()
-        .map_err(|_| "Invalid start IP address".to_string())?;
-    let end_last: u8 = end_parts[3]
-        .parse()
-        .map_err(|_| "Invalid end IP address".to_string())?;
+    let start_last = start_octets[3];
+    let end_last = end_octets[3];
 
     if start_last > end_last {
         return Err("Start IP must be less than or equal to end IP".to_string());
@@ -35,15 +32,12 @@ pub fn parse_ip_range(start: &str, end: &str) -> Result<String, String> {
     // Format: "192.168.1.1-254" for asic-rs, or "192.168.1.1" if single IP
     let range = if start_last == end_last {
         // Single IP, no range needed
-        format!(
-            "{}.{}.{}.{}",
-            start_parts[0], start_parts[1], start_parts[2], start_last
-        )
+        start_addr.to_string()
     } else {
         // Range format
         format!(
             "{}.{}.{}.{}-{}",
-            start_parts[0], start_parts[1], start_parts[2], start_last, end_last
+            start_octets[0], start_octets[1], start_octets[2], start_last, end_last
         )
     };
 
@@ -63,7 +57,15 @@ pub fn calculate_total_ips(range: &str) -> usize {
                 }
             }
         }
+
+        return 0;
     }
+
+    // Single IP format
+    if range.parse::<Ipv4Addr>().is_ok() {
+        return 1;
+    }
+
     0
 }
 
@@ -294,4 +296,33 @@ pub fn scan_ranges(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_total_ips, parse_ip_range};
+
+    #[test]
+    fn parse_ip_range_supports_single_ip() {
+        let range = parse_ip_range("192.168.1.42", "192.168.1.42").unwrap();
+        assert_eq!(range, "192.168.1.42");
+    }
+
+    #[test]
+    fn parse_ip_range_supports_subnet_range() {
+        let range = parse_ip_range("10.0.81.1", "10.0.81.254").unwrap();
+        assert_eq!(range, "10.0.81.1-254");
+    }
+
+    #[test]
+    fn parse_ip_range_rejects_invalid_start_address() {
+        let err = parse_ip_range("10.0.999.1", "10.0.81.254").unwrap_err();
+        assert_eq!(err, "Invalid start IP address");
+    }
+
+    #[test]
+    fn calculate_total_ips_handles_range_and_single_ip() {
+        assert_eq!(calculate_total_ips("10.0.81.1-254"), 254);
+        assert_eq!(calculate_total_ips("10.0.81.42"), 1);
+    }
 }
