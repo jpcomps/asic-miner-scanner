@@ -16,5 +16,5 @@ pub fn spawn<F>(future: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let _ = global_runtime().spawn(future);
+    drop(global_runtime().spawn(future));
 }
