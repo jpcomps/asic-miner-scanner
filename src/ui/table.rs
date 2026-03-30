@@ -137,23 +137,15 @@ pub fn draw_miners_table(
                 .clicked()
             {
                 let selected_ips = selected_miners.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                crate::runtime::spawn(async move {
                     for ip in selected_ips {
-                        let ip_clone = ip.clone();
-                        rt.block_on(async move {
-                            let factory = MinerFactory::new();
-                            if let Ok(Some(miner)) =
-                                factory.get_miner(ip_clone.parse().unwrap()).await
-                            {
-                                match miner.resume(None).await {
-                                    Ok(_) => println!("✓ Started miner: {ip_clone}"),
-                                    Err(e) => {
-                                        eprintln!("✗ Failed to start {ip_clone}: {e}")
-                                    }
-                                }
+                        let factory = MinerFactory::new();
+                        if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
+                            match miner.resume(None).await {
+                                Ok(_) => println!("✓ Started miner: {ip}"),
+                                Err(e) => eprintln!("✗ Failed to start {ip}: {e}"),
                             }
-                        });
+                        }
                     }
                 });
             }
@@ -175,21 +167,15 @@ pub fn draw_miners_table(
                 .clicked()
             {
                 let selected_ips = selected_miners.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                crate::runtime::spawn(async move {
                     for ip in selected_ips {
-                        let ip_clone = ip.clone();
-                        rt.block_on(async move {
-                            let factory = MinerFactory::new();
-                            if let Ok(Some(miner)) =
-                                factory.get_miner(ip_clone.parse().unwrap()).await
-                            {
-                                match miner.pause(None).await {
-                                    Ok(_) => println!("✓ Stopped miner: {ip_clone}"),
-                                    Err(e) => eprintln!("✗ Failed to stop {ip_clone}: {e}"),
-                                }
+                        let factory = MinerFactory::new();
+                        if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
+                            match miner.pause(None).await {
+                                Ok(_) => println!("✓ Stopped miner: {ip}"),
+                                Err(e) => eprintln!("✗ Failed to stop {ip}: {e}"),
                             }
-                        });
+                        }
                     }
                 });
             }
@@ -218,28 +204,23 @@ pub fn draw_miners_table(
                     .map(|m| (m.ip.clone(), m.light_flashing))
                     .collect();
 
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                crate::runtime::spawn(async move {
                     for ip in selected_ips {
-                        let ip_clone = ip.clone();
                         let current_state = states.get(&ip).copied().unwrap_or(false);
-                        rt.block_on(async move {
-                            let factory = MinerFactory::new();
-                            if let Ok(Some(miner)) =
-                                factory.get_miner(ip_clone.parse().unwrap()).await
-                            {
-                                let new_state = !current_state;
-                                match miner.set_fault_light(new_state).await {
-                                    Ok(_) => println!(
-                                        "✓ Set fault light to {} on: {ip_clone}",
-                                        if new_state { "ON" } else { "OFF" }
-                                    ),
-                                    Err(e) => {
-                                        eprintln!("✗ Failed to set fault light on {ip_clone}: {e}")
-                                    }
+                        let factory = MinerFactory::new();
+                        if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
+                            let new_state = !current_state;
+                            match miner.set_fault_light(new_state).await {
+                                Ok(_) => println!(
+                                    "✓ Set fault light to {} on: {}",
+                                    if new_state { "ON" } else { "OFF" },
+                                    ip
+                                ),
+                                Err(e) => {
+                                    eprintln!("✗ Failed to set fault light on {}: {}", ip, e)
                                 }
                             }
-                        });
+                        }
                     }
                 });
             }
@@ -325,6 +306,7 @@ pub fn draw_miners_table(
                             .column(Column::initial(150.0).resizable(true)) // Model
                             .column(Column::initial(150.0).resizable(true)) // Firmware
                             .column(Column::initial(150.0).resizable(true)) // Control Board
+                            .column(Column::initial(90.0).resizable(true)) // Active Boards
                             .column(Column::initial(120.0).resizable(true)) // Hashrate
                             .column(Column::initial(100.0).resizable(true)) // Wattage
                             .column(Column::initial(100.0).resizable(true)) // Efficiency
@@ -439,6 +421,22 @@ pub fn draw_miners_table(
                                         .clicked()
                                     {
                                         clicked_column = Some(SortColumn::ControlBoard);
+                                    }
+                                });
+                                header.col(|ui| {
+                                    if ui
+                                        .button(
+                                            egui::RichText::new(format!(
+                                                "BOARDS{}",
+                                                get_indicator(SortColumn::ActiveBoards)
+                                            ))
+                                            .size(11.0)
+                                            .color(Color32::from_rgb(255, 87, 51))
+                                            .monospace(),
+                                        )
+                                        .clicked()
+                                    {
+                                        clicked_column = Some(SortColumn::ActiveBoards);
                                     }
                                 });
                                 header.col(|ui| {
@@ -642,6 +640,14 @@ pub fn draw_miners_table(
                                                 egui::RichText::new(&miner.control_board)
                                                     .size(11.0)
                                                     .color(Color32::from_rgb(200, 200, 200))
+                                                    .monospace(),
+                                            );
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&miner.active_boards)
+                                                    .size(11.0)
+                                                    .color(Color32::from_rgb(210, 210, 160))
                                                     .monospace(),
                                             );
                                         });

@@ -1,4 +1,4 @@
-use crate::models::SavedRange;
+use crate::models::{MinerOptionSettings, SavedRange};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, create_dir_all};
 use std::path::PathBuf;
@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub connectivity_timeout_secs: u64,
     #[serde(default = "default_connectivity_retries")]
     pub connectivity_retries: u32,
+    #[serde(default)]
+    pub global_options: MinerOptionSettings,
 }
 
 fn default_refresh_interval() -> u64 {
@@ -65,6 +67,7 @@ pub fn load_config() -> AppConfig {
                     identification_timeout_secs: default_identification_timeout(),
                     connectivity_timeout_secs: default_connectivity_timeout(),
                     connectivity_retries: default_connectivity_retries(),
+                    global_options: MinerOptionSettings::default(),
                 };
             }
         }

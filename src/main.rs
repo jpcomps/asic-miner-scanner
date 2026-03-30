@@ -1,38 +1,23 @@
 mod config;
 mod models;
+mod options;
 mod recording;
+mod runtime;
 mod scanner;
 mod ui;
 
 use eframe::egui;
 use egui::Color32;
-use models::{MetricsHistory, MinerInfo, SavedRange, ScanProgress, SortColumn, SortDirection};
+use models::{
+    MetricsHistory, MinerInfo, MinerOptionSettings, SavedRange, ScanProgress, SortColumn,
+    SortDirection,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use ui::ScanControlState;
 
 fn main() -> Result<(), eframe::Error> {
-    // Auto-increase ulimit to max on Unix systems (do once at startup)
-    #[cfg(unix)]
-    {
-        use rlimit::Resource;
-
-        if let Ok((soft, hard)) = Resource::NOFILE.get() {
-            if soft < hard {
-                // Increase soft limit to hard limit (maximum allowed)
-                match Resource::NOFILE.set(hard, hard) {
-                    Ok(_) => {
-                        println!("✓ Increased file descriptor limit from {soft} to {hard}");
-                    }
-                    Err(e) => {
-                        eprintln!("⚠️  WARNING: Could not increase file descriptor limit from {soft} to {hard}: {e}");
-                    }
-                }
-            }
-        }
-    }
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
@@ -69,8 +54,10 @@ struct MinerScannerApp {
     prev_identification_timeout_secs: u64,                     // Previous value to detect changes
     prev_connectivity_timeout_secs: u64,                       // Previous value to detect changes
     prev_connectivity_retries: u32,                            // Previous value to detect changes
-    fleet_hashrate_history: Vec<(f64, f64)>,                   // (timestamp, total_hashrate)
-    last_fleet_update: Option<Instant>,
+    global_options: MinerOptionSettings,
+    miner_option_overrides: Arc<Mutex<HashMap<String, MinerOptionSettings>>>,
+    miner_options_prefill_pending: Arc<Mutex<HashSet<String>>>,
+    prev_global_options: MinerOptionSettings,
 }
 
 impl MinerScannerApp {
@@ -120,8 +107,10 @@ impl MinerScannerApp {
             prev_identification_timeout_secs: app_config.identification_timeout_secs,
             prev_connectivity_timeout_secs: app_config.connectivity_timeout_secs,
             prev_connectivity_retries: app_config.connectivity_retries,
-            fleet_hashrate_history: Vec::new(),
-            last_fleet_update: None,
+            global_options: app_config.global_options.clone(),
+            miner_option_overrides: Arc::new(Mutex::new(HashMap::new())),
+            miner_options_prefill_pending: Arc::new(Mutex::new(HashSet::new())),
+            prev_global_options: app_config.global_options,
         }
     }
 
@@ -165,20 +154,39 @@ impl MinerScannerApp {
                 SortColumn::Model => a.model.cmp(&b.model),
                 SortColumn::Firmware => a.firmware_version.cmp(&b.firmware_version),
                 SortColumn::ControlBoard => a.control_board.cmp(&b.control_board),
-                SortColumn::Hashrate => extract_numeric(&a.hashrate)
-                    .partial_cmp(&extract_numeric(&b.hashrate))
+                SortColumn::ActiveBoards => a
+                    .active_boards_count
+                    .unwrap_or(0)
+                    .cmp(&b.active_boards_count.unwrap_or(0))
+                    .then_with(|| {
+                        a.total_boards_count
+                            .unwrap_or(0)
+                            .cmp(&b.total_boards_count.unwrap_or(0))
+                    }),
+                SortColumn::Hashrate => a
+                    .hashrate_th
+                    .unwrap_or(extract_numeric(&a.hashrate))
+                    .partial_cmp(&b.hashrate_th.unwrap_or(extract_numeric(&b.hashrate)))
                     .unwrap_or(std::cmp::Ordering::Equal),
-                SortColumn::Wattage => extract_numeric(&a.wattage)
-                    .partial_cmp(&extract_numeric(&b.wattage))
+                SortColumn::Wattage => a
+                    .wattage_w
+                    .unwrap_or(extract_numeric(&a.wattage))
+                    .partial_cmp(&b.wattage_w.unwrap_or(extract_numeric(&b.wattage)))
                     .unwrap_or(std::cmp::Ordering::Equal),
-                SortColumn::Efficiency => extract_numeric(&a.efficiency)
-                    .partial_cmp(&extract_numeric(&b.efficiency))
+                SortColumn::Efficiency => a
+                    .efficiency_w_th
+                    .unwrap_or(extract_numeric(&a.efficiency))
+                    .partial_cmp(&b.efficiency_w_th.unwrap_or(extract_numeric(&b.efficiency)))
                     .unwrap_or(std::cmp::Ordering::Equal),
-                SortColumn::Temperature => extract_numeric(&a.temperature)
-                    .partial_cmp(&extract_numeric(&b.temperature))
+                SortColumn::Temperature => a
+                    .temperature_c
+                    .unwrap_or(extract_numeric(&a.temperature))
+                    .partial_cmp(&b.temperature_c.unwrap_or(extract_numeric(&b.temperature)))
                     .unwrap_or(std::cmp::Ordering::Equal),
-                SortColumn::FanSpeed => extract_numeric(&a.fan_speed)
-                    .partial_cmp(&extract_numeric(&b.fan_speed))
+                SortColumn::FanSpeed => a
+                    .fan_rpm
+                    .unwrap_or(extract_numeric(&a.fan_speed))
+                    .partial_cmp(&b.fan_rpm.unwrap_or(extract_numeric(&b.fan_speed)))
                     .unwrap_or(std::cmp::Ordering::Equal),
                 SortColumn::Pool => a.pool.cmp(&b.pool),
                 SortColumn::Worker => a.worker.cmp(&b.worker),
@@ -199,6 +207,7 @@ impl MinerScannerApp {
             identification_timeout_secs: self.scan_control_state.identification_timeout_secs,
             connectivity_timeout_secs: self.scan_control_state.connectivity_timeout_secs,
             connectivity_retries: self.scan_control_state.connectivity_retries,
+            global_options: self.global_options.clone(),
         };
         config::save_config(&app_config);
     }
@@ -267,17 +276,18 @@ impl MinerScannerApp {
             let mut csv_content = String::new();
 
             // Header
-            csv_content.push_str("IP,Hostname,Model,Firmware,Control Board,Hashrate (TH/s),Wattage (W),Efficiency (W/TH),Temperature (°C),Fan Speed (RPM),Pool,Worker\n");
+            csv_content.push_str("IP,Hostname,Model,Firmware,Control Board,Active Boards,Hashrate (TH/s),Wattage (W),Efficiency (W/TH),Temperature (°C),Fan Speed (RPM),Pool,Worker\n");
 
             // Rows
             for miner in miners.iter() {
                 csv_content.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     miner.ip,
                     miner.hostname,
                     miner.model,
                     miner.firmware_version,
                     miner.control_board,
+                    miner.active_boards,
                     miner.hashrate.replace(" TH/s", ""),
                     miner.wattage.replace(" W", ""),
                     miner.efficiency.replace(" W/TH", ""),
@@ -354,43 +364,6 @@ impl eframe::App for MinerScannerApp {
             }
         }
 
-        // Update fleet hashrate history periodically (every ~33ms for 30fps rolling effect)
-        let should_update_fleet = if let Some(last_update) = self.last_fleet_update {
-            last_update.elapsed().as_millis() >= 33
-        } else {
-            true
-        };
-
-        if should_update_fleet {
-            let miners = self.miners.lock().unwrap();
-
-            // Only record if there are miners
-            if !miners.is_empty() {
-                let total_hashrate: f64 = miners
-                    .iter()
-                    .filter_map(|m| m.hashrate.split_whitespace().next()?.parse::<f64>().ok())
-                    .sum();
-                drop(miners);
-
-                let timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64();
-
-                self.fleet_hashrate_history
-                    .push((timestamp, total_hashrate));
-
-                // Keep only last 9000 points (~5 minutes at 30fps for smooth rolling)
-                if self.fleet_hashrate_history.len() > 9000 {
-                    self.fleet_hashrate_history.remove(0);
-                }
-            } else {
-                drop(miners);
-            }
-
-            self.last_fleet_update = Some(Instant::now());
-        }
-
         // Show miner detail modal if one is selected
         ui::draw_miner_detail_modal(
             ctx,
@@ -401,6 +374,9 @@ impl eframe::App for MinerScannerApp {
             &mut self.detail_metrics_history,
             &mut self.recording_states,
             &mut self.detail_refresh_interval_secs,
+            &self.global_options,
+            Arc::clone(&self.miner_option_overrides),
+            Arc::clone(&self.miner_options_prefill_pending),
         );
 
         // Save config if any interval or scan parameter changed
@@ -411,6 +387,7 @@ impl eframe::App for MinerScannerApp {
             || self.scan_control_state.connectivity_timeout_secs
                 != self.prev_connectivity_timeout_secs
             || self.scan_control_state.connectivity_retries != self.prev_connectivity_retries
+            || self.global_options != self.prev_global_options
         {
             self.prev_detail_refresh_interval_secs = self.detail_refresh_interval_secs;
             self.prev_auto_scan_interval_secs = self.scan_control_state.auto_scan_interval_secs;
@@ -418,6 +395,7 @@ impl eframe::App for MinerScannerApp {
                 self.scan_control_state.identification_timeout_secs;
             self.prev_connectivity_timeout_secs = self.scan_control_state.connectivity_timeout_secs;
             self.prev_connectivity_retries = self.scan_control_state.connectivity_retries;
+            self.prev_global_options = self.global_options.clone();
             self.save_config();
         }
 
@@ -472,6 +450,16 @@ impl eframe::App for MinerScannerApp {
                 });
                 ui.add_space(15.0);
 
+                if !self.error_message.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.error_message)
+                            .size(11.0)
+                            .color(Color32::from_rgb(255, 120, 120))
+                            .monospace(),
+                    );
+                    ui.add_space(6.0);
+                }
+
                 ui.separator();
             });
 
@@ -484,32 +472,65 @@ impl eframe::App for MinerScannerApp {
             )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    // Top row: Fleet Overview + Scan Control
-                    let row_height = 400.0;
+                    // Top row: two equal columns with explicit gutter
+                    let column_gap = 20.0;
+                    let total_top_width = ui.available_width();
+                    let column_width = (total_top_width - column_gap).max(0.0) / 2.0;
 
-                    ui.horizontal(|ui| {
-                        // Fleet Overview (left column) - centered vertically
+                    let mut on_scan_clicked = false;
+                    let mut on_save_range_clicked = false;
+                    let mut range_to_remove: Option<usize> = None;
+                    let mut range_to_load: Option<SavedRange> = None;
+                    let mut apply_global_selected_clicked = false;
+                    let mut apply_global_all_clicked = false;
+
+                    let miners_count = self.miners.lock().unwrap().len();
+                    let selected_count = self.selected_miners.len();
+                    let show_epic_tuning_presets = {
+                        let miners = self.miners.lock().unwrap();
+
+                        if selected_count > 0 {
+                            let selected_matches: Vec<_> = miners
+                                .iter()
+                                .filter(|miner| self.selected_miners.contains(&miner.ip))
+                                .collect();
+
+                            !selected_matches.is_empty()
+                                && selected_matches
+                                    .iter()
+                                    .all(|miner| miner.is_epic_firmware())
+                        } else {
+                            !miners.is_empty()
+                                && miners.iter().all(|miner| miner.is_epic_firmware())
+                        }
+                    };
+
+                    ui.horizontal_top(|ui| {
                         ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width() / 2.0 - 7.5, row_height),
-                            egui::Layout::top_down(egui::Align::Center),
+                            egui::vec2(column_width, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 let miners = self.miners.lock().unwrap();
-                                ui::draw_stats_card(ui, &miners, &self.fleet_hashrate_history);
+                                ui::draw_stats_card(ui, &miners);
+                                ui.add_space(12.0);
+                                ui::draw_global_options_card(
+                                    ui,
+                                    &mut self.global_options,
+                                    selected_count,
+                                    miners_count,
+                                    show_epic_tuning_presets,
+                                    &mut apply_global_selected_clicked,
+                                    &mut apply_global_all_clicked,
+                                );
                             },
                         );
 
-                        ui.add_space(15.0);
+                        ui.add_space(column_gap);
 
-                        // Scan Control & Ranges (right column)
                         ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), row_height),
+                            egui::vec2(column_width, 0.0),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                let mut on_scan_clicked = false;
-                                let mut on_save_range_clicked = false;
-                                let mut range_to_remove: Option<usize> = None;
-                                let mut range_to_load: Option<SavedRange> = None;
-
                                 ui::draw_scan_and_ranges_card(
                                     ui,
                                     &mut self.scan_control_state,
@@ -520,29 +541,77 @@ impl eframe::App for MinerScannerApp {
                                     &mut range_to_remove,
                                     &mut range_to_load,
                                 );
-
-                                // Handle events after rendering
-                                if on_scan_clicked {
-                                    self.scan_all_saved_ranges();
-                                }
-                                if on_save_range_clicked {
-                                    self.add_saved_range();
-                                }
-                                if let Some(idx) = range_to_remove {
-                                    self.remove_saved_range(idx);
-                                }
-                                if let Some(range) = range_to_load {
-                                    self.load_saved_range(&range);
-                                }
                             },
                         );
                     });
 
-                    ui.add_space(15.0);
+                    // Handle events after rendering
+                    if on_scan_clicked {
+                        self.scan_all_saved_ranges();
+                    }
+                    if on_save_range_clicked {
+                        self.add_saved_range();
+                    }
+                    if let Some(idx) = range_to_remove {
+                        self.remove_saved_range(idx);
+                    }
+                    if let Some(range) = range_to_load {
+                        self.load_saved_range(&range);
+                    }
+                    if apply_global_selected_clicked {
+                        let selected_ips: Vec<String> =
+                            self.selected_miners.iter().cloned().collect();
+                        if !self.global_options.has_any_enabled() {
+                            self.error_message =
+                                "Enable at least one global option before applying".to_string();
+                        } else if let Some(message) =
+                            self.global_options.tuning_validation_message()
+                        {
+                            self.error_message = message;
+                        } else if let Some(message) = self.global_options.pool_validation_message()
+                        {
+                            self.error_message = message;
+                        } else if selected_ips.is_empty() {
+                            self.error_message = "No selected miners to apply options".to_string();
+                        } else {
+                            self.error_message.clear();
+                            let settings = self.global_options.clone();
+                            runtime::spawn(async move {
+                                options::apply_options_to_many(selected_ips, settings).await;
+                            });
+                        }
+                    }
+                    if apply_global_all_clicked {
+                        let all_ips: Vec<String> = self
+                            .miners
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|m| m.ip.clone())
+                            .collect();
+                        if !self.global_options.has_any_enabled() {
+                            self.error_message =
+                                "Enable at least one global option before applying".to_string();
+                        } else if let Some(message) =
+                            self.global_options.tuning_validation_message()
+                        {
+                            self.error_message = message;
+                        } else if let Some(message) = self.global_options.pool_validation_message()
+                        {
+                            self.error_message = message;
+                        } else if all_ips.is_empty() {
+                            self.error_message =
+                                "No discovered miners to apply options".to_string();
+                        } else {
+                            self.error_message.clear();
+                            let settings = self.global_options.clone();
+                            runtime::spawn(async move {
+                                options::apply_options_to_many(all_ips, settings).await;
+                            });
+                        }
+                    }
 
-                    // Table
-                    let miners = self.miners.lock().unwrap().clone();
-                    drop(miners);
+                    ui.add_space(15.0);
 
                     let mut export_clicked = false;
                     let clicked_column = ui::draw_miners_table(

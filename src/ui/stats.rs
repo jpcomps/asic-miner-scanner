@@ -1,23 +1,12 @@
 use crate::models::MinerInfo;
 use eframe::egui;
 use egui::Color32;
-use egui_plot::{Line, Plot, PlotPoints};
 
-pub fn draw_stats_card(
-    ui: &mut egui::Ui,
-    miners: &[MinerInfo],
-    fleet_hashrate_history: &[(f64, f64)],
-) {
+pub fn draw_stats_card(ui: &mut egui::Ui, miners: &[MinerInfo]) {
+    let target_inner_width = (ui.available_width() - 30.0).max(0.0);
     let miner_count = miners.len();
 
-    // Parse hashrate - it's stored as just the number without units
-    let hashrates: Vec<f64> = miners
-        .iter()
-        .filter_map(|m| {
-            // Try to parse as-is first, or split and take first part
-            m.hashrate.split_whitespace().next()?.parse::<f64>().ok()
-        })
-        .collect();
+    let hashrates: Vec<f64> = miners.iter().filter_map(|m| m.hashrate_th).collect();
 
     let total_hashrate: f64 = hashrates.iter().sum();
 
@@ -27,18 +16,11 @@ pub fn draw_stats_card(
         0.0
     };
 
-    // Parse wattage - extract numbers from strings like "3400 W" or "3400.5"
-    let wattages: Vec<f64> = miners
-        .iter()
-        .filter_map(|m| m.wattage.split_whitespace().next()?.parse::<f64>().ok())
-        .collect();
+    let wattages: Vec<f64> = miners.iter().filter_map(|m| m.wattage_w).collect();
 
     let total_wattage: f64 = wattages.iter().sum();
 
-    let temps: Vec<f64> = miners
-        .iter()
-        .filter_map(|m| m.temperature.trim_end_matches("°C").parse::<f64>().ok())
-        .collect();
+    let temps: Vec<f64> = miners.iter().filter_map(|m| m.temperature_c).collect();
 
     let avg_temp = if !temps.is_empty() {
         temps.iter().sum::<f64>() / temps.len() as f64
@@ -46,22 +28,10 @@ pub fn draw_stats_card(
         0.0
     };
 
-    // Parse efficiency - remove any units and parse, filter out NaN values
     let efficiencies: Vec<f64> = miners
         .iter()
-        .filter_map(|m| {
-            let val = m
-                .efficiency
-                .split_whitespace()
-                .next()?
-                .parse::<f64>()
-                .ok()?;
-            if val.is_finite() {
-                Some(val)
-            } else {
-                None
-            }
-        })
+        .filter_map(|m| m.efficiency_w_th)
+        .filter(|v| v.is_finite())
         .collect();
 
     let avg_efficiency = if !efficiencies.is_empty() {
@@ -75,6 +45,8 @@ pub fn draw_stats_card(
         .corner_radius(4.0)
         .inner_margin(15.0)
         .show(ui, |ui| {
+            ui.set_width(target_inner_width);
+            ui.set_max_width(target_inner_width);
             ui.vertical_centered(|ui| {
                 ui.label(
                     egui::RichText::new("⚡ FLEET OVERVIEW")
@@ -123,7 +95,7 @@ pub fn draw_stats_card(
                 };
 
                 ui.label(
-                    egui::RichText::new(format!("{hashrate_display:.2} {hashrate_unit}  •   {wattage_format:.2} {wattage_unit}  •   {fleet_efficiency:.2} W/TH"))
+                    egui::RichText::new(format!("{hashrate_display:.2} {hashrate_unit}  •   {wattage_format} {wattage_unit}  •   {fleet_efficiency:.2} W/TH"))
                         .size(16.0)
                         .color(Color32::WHITE)
                         .strong()
@@ -143,78 +115,4 @@ pub fn draw_stats_card(
                 );
             });
         });
-
-    ui.add_space(15.0);
-
-    // Fleet Hashrate History Plot
-    if !fleet_hashrate_history.is_empty() {
-        // Request continuous repaints for smooth 60fps animation
-        ui.ctx().request_repaint();
-
-        egui::Frame::new()
-            .fill(Color32::from_rgb(28, 28, 28))
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(60, 60, 60)))
-            .corner_radius(4.0)
-            .inner_margin(15.0)
-            .show(ui, |ui| {
-                // Determine if we should use PH or TH based on max value
-                let max_value_th = fleet_hashrate_history
-                    .iter()
-                    .map(|(_, hr)| hr)
-                    .fold(0.0f64, |a, &b| a.max(b));
-
-                let use_ph = max_value_th >= 1000.0;
-                let unit_label = if use_ph { "PH/s" } else { "TH/s" };
-                let divisor = if use_ph { 1000.0 } else { 1.0 };
-
-                ui.label(
-                    egui::RichText::new(format!("FLEET HASHRATE HISTORY ({})", unit_label))
-                        .size(11.0)
-                        .color(Color32::from_rgb(240, 240, 240))
-                        .strong()
-                        .monospace(),
-                );
-
-                ui.add_space(5.0);
-
-                // Convert to plot points (no interpolation needed at 30fps)
-                let points: Vec<[f64; 2]> = fleet_hashrate_history
-                    .iter()
-                    .map(|(ts, hr)| [*ts, hr / divisor])
-                    .collect();
-
-                // Calculate y-axis range with interval-based scaling
-                let min_hashrate = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-                let max_hashrate = points.iter().map(|p| p[1]).fold(0.0f64, f64::max);
-
-                // Round to nearest 100 TH (or 0.1 PH) intervals
-                let interval = if use_ph { 0.1 } else { 100.0 };
-                let y_min = (min_hashrate / interval).floor() * interval;
-                let y_max = ((max_hashrate / interval).ceil() + 1.0) * interval;
-
-                Plot::new("fleet_hashrate_plot")
-                    .height(150.0)
-                    .allow_zoom([true, false])
-                    .allow_scroll(false)
-                    .include_y(y_min)
-                    .include_y(y_max)
-                    .show_axes([true, true])
-                    .x_axis_formatter(|val, _range| {
-                        use chrono::{Local, TimeZone};
-                        if let Some(dt) = Local.timestamp_opt(val.value as i64, 0).single() {
-                            dt.format("%H:%M:%S").to_string()
-                        } else {
-                            String::new()
-                        }
-                    })
-                    .y_axis_formatter(move |val, _range| format!("{:.1}", val.value))
-                    .show(ui, |plot_ui| {
-                        plot_ui.line(
-                            Line::new("Fleet Hashrate", PlotPoints::from(points))
-                                .color(Color32::from_rgb(255, 87, 51))
-                                .width(2.0),
-                        );
-                    });
-            });
-    }
 }

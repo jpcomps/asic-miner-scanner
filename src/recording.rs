@@ -1,4 +1,5 @@
 use crate::models::{MinerInfo, RecordingState};
+use asic_rs_core::data::hashrate::HashRateUnit;
 use chrono::Local;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::Write;
@@ -6,6 +7,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 const RECORDINGS_DIR: &str = "asic-miner-scanner/recordings";
+
+fn hashrate_to_th(value: Option<&asic_rs_core::data::hashrate::HashRate>) -> f64 {
+    value
+        .cloned()
+        .map(|hr| hr.as_unit(HashRateUnit::TeraHash).value)
+        .unwrap_or(0.0)
+}
 
 pub fn get_recordings_dir() -> Result<PathBuf, std::io::Error> {
     let home = dirs::home_dir().ok_or_else(|| {
@@ -87,19 +95,7 @@ pub fn append_data_point(
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
 
     // Extract total hashrate
-    let total_hashrate = if let Some(hr) = &data.hashrate {
-        let converted = hr
-            .clone()
-            .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
-        let display_str = format!("{converted}");
-        display_str
-            .split_whitespace()
-            .next()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0)
-    } else {
-        0.0
-    };
+    let total_hashrate = hashrate_to_th(data.hashrate.as_ref());
 
     // Extract power
     let power = if let Some(wattage) = data.wattage {
@@ -122,21 +118,7 @@ pub fn append_data_point(
     let board_hashrates: Vec<f64> = data
         .hashboards
         .iter()
-        .map(|board| {
-            if let Some(hr) = &board.hashrate {
-                let converted = hr
-                    .clone()
-                    .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
-                let display_str = format!("{converted}");
-                display_str
-                    .split_whitespace()
-                    .next()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            }
-        })
+        .map(|board| hashrate_to_th(board.hashrate.as_ref()))
         .collect();
 
     // Extract per-board temperatures (dynamic)

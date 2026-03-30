@@ -1,8 +1,15 @@
-use crate::models::{MetricsHistory, MinerInfo, RecordingState};
+use crate::models::{
+    FanModeSelection, MetricsHistory, MinerInfo, MinerOptionSettings, MiningModeSelection,
+    PoolInput, RecordingState, TuningTargetSelection, EPIC_TUNING_ALGO_OPTIONS,
+    HASHRATE_ALGO_OPTIONS,
+};
+use crate::options;
 use asic_rs::MinerFactory;
+use asic_rs_core::data::hashrate::{HashRate, HashRateUnit};
+use asic_rs_core::data::miner::MinerData;
 use eframe::egui;
 use egui::Color32;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,6 +23,9 @@ pub fn draw_miner_detail_modal(
     detail_metrics_history: &mut HashMap<String, MetricsHistory>,
     recording_states: &mut HashMap<String, RecordingState>,
     detail_refresh_interval_secs: &mut u64,
+    global_options: &MinerOptionSettings,
+    miner_option_overrides: Arc<Mutex<HashMap<String, MinerOptionSettings>>>,
+    miner_options_prefill_pending: Arc<Mutex<HashSet<String>>>,
 ) {
     let mut miners_to_close = Vec::new();
 
@@ -80,6 +90,9 @@ pub fn draw_miner_detail_modal(
                                     detail_metrics_history,
                                     recording_states,
                                     detail_refresh_interval_secs,
+                                    global_options,
+                                    Arc::clone(&miner_option_overrides),
+                                    Arc::clone(&miner_options_prefill_pending),
                                 );
                             });
                     });
@@ -104,6 +117,11 @@ pub fn draw_miner_detail_modal(
         detail_metrics_history.remove(&miner.ip);
         detail_refresh_times.remove(&miner.ip);
         detail_graph_update_times.remove(&miner.ip);
+        miner_option_overrides.lock().unwrap().remove(&miner.ip);
+        miner_options_prefill_pending
+            .lock()
+            .unwrap()
+            .remove(&miner.ip);
 
         // Delete recording file if it exists
         if let Some(recording) = recording_states.remove(&miner.ip) {
@@ -114,7 +132,13 @@ pub fn draw_miner_detail_modal(
     }
 }
 
-fn draw_basic_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
+fn hashrate_to_terahash(hashrate: Option<&HashRate>) -> Option<f64> {
+    hashrate
+        .cloned()
+        .map(|value| value.as_unit(HashRateUnit::TeraHash).value)
+}
+
+fn draw_basic_info(ui: &mut egui::Ui, data: &MinerData) {
     ui.heading("Basic Information");
     ui.separator();
     ui.add_space(5.0);
@@ -156,7 +180,7 @@ fn draw_basic_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
             ui.label(
                 data.control_board_version
                     .as_ref()
-                    .map(|cb| format!("{cb:?}"))
+                    .map(|cb| cb.name.clone())
                     .unwrap_or_else(|| "N/A".to_string()),
             );
             ui.end_row();
@@ -183,7 +207,7 @@ fn draw_basic_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
         });
 }
 
-fn draw_performance_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
+fn draw_performance_info(ui: &mut egui::Ui, data: &MinerData) {
     ui.heading("Performance");
     ui.separator();
     ui.add_space(5.0);
@@ -194,12 +218,8 @@ fn draw_performance_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerDa
         .striped(true)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("Hashrate:").strong());
-            if let Some(hr) = &data.hashrate {
-                ui.label(format!(
-                    "{:.2}",
-                    hr.clone()
-                        .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash)
-                ));
+            if let Some(hashrate) = hashrate_to_terahash(data.hashrate.as_ref()) {
+                ui.label(format!("{hashrate:.2} TH/s"));
             } else {
                 ui.label("N/A");
             }
@@ -231,7 +251,7 @@ fn draw_performance_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerDa
         });
 }
 
-fn draw_fans_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
+fn draw_fans_info(ui: &mut egui::Ui, data: &MinerData) {
     ui.heading("Fans");
     ui.separator();
     ui.add_space(5.0);
@@ -252,30 +272,58 @@ fn draw_fans_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
     }
 }
 
-fn draw_pools_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
+fn draw_pools_info(ui: &mut egui::Ui, data: &MinerData) {
     ui.heading("Pools");
     ui.separator();
     ui.add_space(5.0);
 
     if !data.pools.is_empty() {
-        for (i, pool) in data.pools.iter().enumerate() {
-            ui.label(egui::RichText::new(format!("Pool {}:", i + 1)).strong());
-            ui.indent(format!("pool_{i}"), |ui| {
-                if let Some(url) = &pool.url {
-                    ui.label(format!("URL: {url}"));
-                }
-                if let Some(user) = &pool.user {
-                    ui.label(format!("User: {user}"));
-                }
-                ui.label(format!(
-                    "Active: {}",
-                    if pool.active.unwrap_or(false) {
-                        "Yes"
-                    } else {
-                        "No"
+        for (group_idx, group) in data.pools.iter().enumerate() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Group {}: {} (quota {}%)",
+                    group_idx + 1,
+                    group.name,
+                    group.quota
+                ))
+                .strong(),
+            );
+
+            if group.pools.is_empty() {
+                ui.indent(format!("pool_group_{group_idx}"), |ui| {
+                    ui.label("No pools configured in this group");
+                });
+                ui.add_space(5.0);
+                continue;
+            }
+
+            for (pool_idx, pool) in group.pools.iter().enumerate() {
+                ui.indent(format!("pool_group_{group_idx}_pool_{pool_idx}"), |ui| {
+                    ui.label(egui::RichText::new(format!("Pool {}", pool_idx + 1)).strong());
+
+                    if let Some(url) = &pool.url {
+                        ui.label(format!("URL: {url}"));
                     }
-                ));
-            });
+
+                    if let Some(user) = &pool.user {
+                        ui.label(format!("User: {user}"));
+                    }
+
+                    ui.label(format!(
+                        "Active: {}",
+                        if pool.active.unwrap_or(false) {
+                            "Yes"
+                        } else {
+                            "No"
+                        }
+                    ));
+
+                    if let Some(alive) = pool.alive {
+                        ui.label(format!("Alive: {}", if alive { "Yes" } else { "No" }));
+                    }
+                });
+            }
+
             ui.add_space(5.0);
         }
     } else {
@@ -283,7 +331,7 @@ fn draw_pools_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
     }
 }
 
-fn draw_hashboards_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerData) {
+fn draw_hashboards_info(ui: &mut egui::Ui, data: &MinerData) {
     ui.heading("Hashboards");
     ui.separator();
     ui.add_space(5.0);
@@ -299,12 +347,9 @@ fn draw_hashboards_info(ui: &mut egui::Ui, data: &asic_rs::data::miner::MinerDat
                     ui.label(format!("Intake Temp: {:.1}°C", intake_temp.as_celsius()));
                 }
                 if let Some(hashrate) = &board.hashrate {
-                    ui.label(format!(
-                        "Hashrate: {:.2}",
-                        hashrate
-                            .clone()
-                            .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash)
-                    ));
+                    if let Some(value) = hashrate_to_terahash(Some(hashrate)) {
+                        ui.label(format!("Hashrate: {value:.2} TH/s"));
+                    }
                 }
                 if let Some(chips) = board.expected_chips {
                     ui.label(format!("Expected Chips: {chips}"));
@@ -327,6 +372,9 @@ fn draw_controls_and_graphs(
     detail_metrics_history: &mut HashMap<String, MetricsHistory>,
     recording_states: &mut HashMap<String, RecordingState>,
     detail_refresh_interval_secs: &mut u64,
+    global_options: &MinerOptionSettings,
+    miner_option_overrides: Arc<Mutex<HashMap<String, MinerOptionSettings>>>,
+    miner_options_prefill_pending: Arc<Mutex<HashSet<String>>>,
 ) {
     // Graph rolling update logic (every ~33ms for 30fps smooth rolling)
     let should_update_graph = if let Some(last_update) = detail_graph_update_times.get(&miner.ip) {
@@ -346,20 +394,16 @@ fn draw_controls_and_graphs(
     if should_auto_refresh {
         let ip = miner.ip.clone();
         let miners = Arc::clone(&miners_arc);
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                let factory = MinerFactory::new();
-                if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
-                    let data = miner_obj.get_data().await;
+        crate::runtime::spawn(async move {
+            let factory = MinerFactory::new();
+            if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
+                let data = miner_obj.get_data().await;
 
-                    // Update the miner in the main list
-                    let mut miners_list = miners.lock().unwrap();
-                    if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
-                        existing.full_data = Some(data);
-                    }
+                let mut miners_list = miners.lock().unwrap();
+                if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
+                    existing.full_data = Some(data);
                 }
-            });
+            }
         });
         detail_refresh_times.insert(miner.ip.clone(), Instant::now());
     }
@@ -373,15 +417,7 @@ fn draw_controls_and_graphs(
                 .as_secs_f64();
 
             let total_hashrate = if let Some(hr) = &data.hashrate {
-                let converted = hr
-                    .clone()
-                    .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
-                let display_str = format!("{converted}");
-                display_str
-                    .split_whitespace()
-                    .next()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0)
+                hashrate_to_terahash(Some(hr)).unwrap_or(0.0)
             } else {
                 0.0
             };
@@ -396,18 +432,7 @@ fn draw_controls_and_graphs(
             let board_hashrates: Vec<f64> = data
                 .hashboards
                 .iter()
-                .filter_map(|board| {
-                    board.hashrate.as_ref().and_then(|hr| {
-                        let converted = hr
-                            .clone()
-                            .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash);
-                        let display_str = format!("{converted}");
-                        display_str
-                            .split_whitespace()
-                            .next()
-                            .and_then(|s| s.parse::<f64>().ok())
-                    })
-                })
+                .filter_map(|board| hashrate_to_terahash(board.hashrate.as_ref()))
                 .collect();
 
             // Collect per-board temperatures and calculate average
@@ -425,7 +450,7 @@ fn draw_controls_and_graphs(
 
             let history = detail_metrics_history.entry(miner.ip.clone()).or_default();
 
-            history.push((
+            history.push_back((
                 timestamp,
                 total_hashrate,
                 power,
@@ -436,7 +461,7 @@ fn draw_controls_and_graphs(
 
             // Keep only last 9000 points (~5 minutes at 30fps for smooth rolling)
             if history.len() > 9000 {
-                history.remove(0);
+                history.pop_front();
             }
         }
 
@@ -474,20 +499,16 @@ fn draw_controls_and_graphs(
         {
             let ip = miner.ip.clone();
             let miners = Arc::clone(&miners_arc);
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let factory = MinerFactory::new();
-                    if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
-                        let data = miner_obj.get_data().await;
+            crate::runtime::spawn(async move {
+                let factory = MinerFactory::new();
+                if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
+                    let data = miner_obj.get_data().await;
 
-                        // Update the miner in the main list
-                        let mut miners_list = miners.lock().unwrap();
-                        if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
-                            existing.full_data = Some(data);
-                        }
+                    let mut miners_list = miners.lock().unwrap();
+                    if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
+                        existing.full_data = Some(data);
                     }
-                });
+                }
             });
             detail_refresh_times.insert(miner.ip.clone(), Instant::now());
         }
@@ -507,6 +528,18 @@ fn draw_controls_and_graphs(
         );
     });
 
+    ui.add_space(10.0);
+
+    draw_miner_options_panel(
+        ui,
+        miner,
+        global_options,
+        Arc::clone(&miner_option_overrides),
+        Arc::clone(&miner_options_prefill_pending),
+    );
+
+    ui.add_space(10.0);
+
     // Web interface and control buttons
     draw_control_buttons(
         ui,
@@ -518,6 +551,450 @@ fn draw_controls_and_graphs(
 
     // Draw graphs
     draw_metrics_graphs(ui, miner, detail_metrics_history);
+}
+
+fn draw_miner_options_panel(
+    ui: &mut egui::Ui,
+    miner: &MinerInfo,
+    global_options: &MinerOptionSettings,
+    miner_option_overrides: Arc<Mutex<HashMap<String, MinerOptionSettings>>>,
+    miner_options_prefill_pending: Arc<Mutex<HashSet<String>>>,
+) {
+    ui.heading("Miner Options");
+    ui.add_space(4.0);
+    let show_epic_tuning_presets = miner.is_epic_firmware();
+
+    let should_try_prefill = {
+        let has_override = miner_option_overrides
+            .lock()
+            .unwrap()
+            .contains_key(&miner.ip);
+        let mut pending = miner_options_prefill_pending.lock().unwrap();
+        if !has_override && !pending.contains(&miner.ip) {
+            pending.insert(miner.ip.clone());
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_try_prefill {
+        let ip = miner.ip.clone();
+        let defaults = global_options.clone();
+        let overrides = Arc::clone(&miner_option_overrides);
+        let pending = Arc::clone(&miner_options_prefill_pending);
+        crate::runtime::spawn(async move {
+            if let Ok(current) = options::fetch_current_options(ip.clone(), defaults).await {
+                overrides.lock().unwrap().insert(ip.clone(), current);
+            }
+            pending.lock().unwrap().remove(&ip);
+        });
+    }
+
+    let mut options_state = miner_option_overrides
+        .lock()
+        .unwrap()
+        .get(&miner.ip)
+        .cloned()
+        .unwrap_or_else(|| global_options.clone());
+
+    ui.horizontal_wrapped(|ui| {
+        let capability_chip = |ui: &mut egui::Ui, label: &str, supported: bool| {
+            let color = if supported {
+                Color32::from_rgb(90, 170, 100)
+            } else {
+                Color32::from_rgb(140, 90, 90)
+            };
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}: {}",
+                    label,
+                    if supported { "YES" } else { "NO" }
+                ))
+                .size(10.0)
+                .color(color)
+                .monospace(),
+            );
+        };
+
+        capability_chip(ui, "POWER", miner.capabilities.set_power_limit);
+        capability_chip(ui, "FAN", miner.capabilities.fan_config);
+        capability_chip(ui, "TUNING", miner.capabilities.tuning_config);
+        capability_chip(ui, "SCALING", miner.capabilities.scaling_config);
+        capability_chip(ui, "POOLS", miner.capabilities.pools_config);
+    });
+
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut options_state.apply_power_limit, "");
+        ui.label("Power");
+        ui.add_enabled(
+            miner.capabilities.set_power_limit,
+            egui::DragValue::new(&mut options_state.power_limit_watts)
+                .range(100.0..=9000.0)
+                .speed(25.0)
+                .suffix(" W"),
+        );
+    });
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut options_state.apply_fan_config, "");
+        ui.label("Fan");
+
+        ui.add_enabled_ui(miner.capabilities.fan_config, |ui| {
+            egui::ComboBox::from_id_salt(format!("fan_mode_{}", miner.ip))
+                .selected_text(match options_state.fan_mode {
+                    FanModeSelection::Auto => "Auto",
+                    FanModeSelection::Manual => "Manual",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut options_state.fan_mode,
+                        FanModeSelection::Auto,
+                        "Auto",
+                    );
+                    ui.selectable_value(
+                        &mut options_state.fan_mode,
+                        FanModeSelection::Manual,
+                        "Manual",
+                    );
+                });
+
+            match options_state.fan_mode {
+                FanModeSelection::Auto => {
+                    ui.add(
+                        egui::DragValue::new(&mut options_state.fan_target_temp_c)
+                            .range(30.0..=95.0)
+                            .speed(0.5)
+                            .suffix(" C"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut options_state.fan_idle_speed_percent)
+                            .range(0..=100)
+                            .speed(1)
+                            .suffix(" % idle"),
+                    );
+                }
+                FanModeSelection::Manual => {
+                    ui.add(
+                        egui::DragValue::new(&mut options_state.fan_speed_percent)
+                            .range(0..=100)
+                            .speed(1)
+                            .suffix(" %"),
+                    );
+                }
+            }
+        });
+    });
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut options_state.apply_tuning_config, "");
+        ui.label("Tuning");
+
+        ui.add_enabled_ui(miner.capabilities.tuning_config, |ui| {
+            egui::ComboBox::from_id_salt(format!("tuning_target_{}", miner.ip))
+                .selected_text(match options_state.tuning_target {
+                    TuningTargetSelection::MiningMode => "Mode",
+                    TuningTargetSelection::Power => "Power",
+                    TuningTargetSelection::Hashrate => "Hashrate",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut options_state.tuning_target,
+                        TuningTargetSelection::MiningMode,
+                        "Mode",
+                    );
+                    ui.selectable_value(
+                        &mut options_state.tuning_target,
+                        TuningTargetSelection::Power,
+                        "Power",
+                    );
+                    ui.selectable_value(
+                        &mut options_state.tuning_target,
+                        TuningTargetSelection::Hashrate,
+                        "Hashrate",
+                    );
+                });
+        });
+    });
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Target");
+        ui.add_enabled_ui(miner.capabilities.tuning_config, |ui| {
+            match options_state.tuning_target {
+                TuningTargetSelection::MiningMode => {
+                    egui::ComboBox::from_id_salt(format!("tuning_mode_{}", miner.ip))
+                        .selected_text(match options_state.mining_mode {
+                            MiningModeSelection::Low => "Low",
+                            MiningModeSelection::Normal => "Normal",
+                            MiningModeSelection::High => "High",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut options_state.mining_mode,
+                                MiningModeSelection::Low,
+                                "Low",
+                            );
+                            ui.selectable_value(
+                                &mut options_state.mining_mode,
+                                MiningModeSelection::Normal,
+                                "Normal",
+                            );
+                            ui.selectable_value(
+                                &mut options_state.mining_mode,
+                                MiningModeSelection::High,
+                                "High",
+                            );
+                        });
+                }
+                TuningTargetSelection::Power => {
+                    ui.add(
+                        egui::DragValue::new(&mut options_state.tuning_power_watts)
+                            .range(100.0..=9000.0)
+                            .speed(25.0)
+                            .suffix(" W"),
+                    );
+                }
+                TuningTargetSelection::Hashrate => {
+                    ui.add(
+                        egui::DragValue::new(&mut options_state.tuning_hashrate_ths)
+                            .range(1.0..=5000.0)
+                            .speed(5.0)
+                            .suffix(" TH/s"),
+                    );
+                    egui::ComboBox::from_id_salt(format!("tuning_hashrate_algo_{}", miner.ip))
+                        .selected_text(options_state.tuning_hashrate_algo.clone())
+                        .show_ui(ui, |ui| {
+                            for algo in HASHRATE_ALGO_OPTIONS {
+                                ui.selectable_value(
+                                    &mut options_state.tuning_hashrate_algo,
+                                    algo.to_string(),
+                                    algo,
+                                );
+                            }
+                        });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut options_state.tuning_hashrate_algo)
+                            .desired_width(110.0)
+                            .hint_text("custom algo"),
+                    );
+                }
+            }
+
+            ui.label("Algo");
+            if show_epic_tuning_presets {
+                egui::ComboBox::from_id_salt(format!("tuning_algorithm_{}", miner.ip))
+                    .selected_text(if options_state.tuning_algorithm.trim().is_empty() {
+                        "None".to_string()
+                    } else {
+                        options_state.tuning_algorithm.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut options_state.tuning_algorithm,
+                            String::new(),
+                            "None",
+                        );
+                        for algo in EPIC_TUNING_ALGO_OPTIONS {
+                            ui.selectable_value(
+                                &mut options_state.tuning_algorithm,
+                                algo.to_string(),
+                                algo,
+                            );
+                        }
+                    });
+            }
+            ui.add(
+                egui::TextEdit::singleline(&mut options_state.tuning_algorithm)
+                    .desired_width(120.0)
+                    .hint_text(if show_epic_tuning_presets {
+                        "custom override"
+                    } else {
+                        "custom tuning algo"
+                    }),
+            );
+        });
+    });
+
+    if options_state.apply_tuning_config {
+        if let Some(message) = options_state.tuning_validation_message() {
+            ui.label(
+                egui::RichText::new(format!("⚠ {}", message))
+                    .size(10.0)
+                    .color(Color32::from_rgb(255, 120, 120)),
+            );
+        }
+    }
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut options_state.apply_scaling_config, "");
+        ui.label("Scaling");
+
+        ui.add_enabled_ui(miner.capabilities.scaling_config, |ui| {
+            ui.add(
+                egui::DragValue::new(&mut options_state.scaling_step)
+                    .range(1..=100)
+                    .speed(1)
+                    .prefix("step "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut options_state.scaling_minimum)
+                    .range(0..=100)
+                    .speed(1)
+                    .prefix("min "),
+            );
+            ui.checkbox(&mut options_state.scaling_shutdown, "shutdown");
+            ui.add_enabled(
+                options_state.scaling_shutdown,
+                egui::DragValue::new(&mut options_state.scaling_shutdown_duration)
+                    .range(1.0..=300.0)
+                    .speed(1.0)
+                    .suffix(" s"),
+            );
+        });
+    });
+
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut options_state.apply_pool_config, "");
+        ui.label("Pools");
+        ui.add_enabled_ui(miner.capabilities.pools_config, |ui| {
+            ui.label("Group");
+            ui.add(
+                egui::TextEdit::singleline(&mut options_state.pool_group_name)
+                    .desired_width(100.0)
+                    .hint_text("Primary"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut options_state.pool_group_quota)
+                    .range(1..=100)
+                    .suffix(" %"),
+            );
+        });
+    });
+
+    ui.add_enabled_ui(miner.capabilities.pools_config, |ui| {
+        let mut remove_idx: Option<usize> = None;
+        let can_remove_pool = options_state.pool_inputs.len() > 1;
+        for (idx, pool) in options_state.pool_inputs.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}.", idx + 1));
+                ui.add(
+                    egui::TextEdit::singleline(&mut pool.url)
+                        .desired_width(260.0)
+                        .hint_text("stratum+tcp://pool.example.com:3333"),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut pool.username)
+                        .desired_width(180.0)
+                        .hint_text("wallet.worker"),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut pool.password)
+                        .desired_width(70.0)
+                        .hint_text("x"),
+                );
+                if ui
+                    .add_enabled(can_remove_pool, egui::Button::new("-"))
+                    .clicked()
+                {
+                    remove_idx = Some(idx);
+                }
+            });
+        }
+
+        if let Some(idx) = remove_idx {
+            options_state.pool_inputs.remove(idx);
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("+ Add Pool").clicked() {
+                options_state.pool_inputs.push(PoolInput::default());
+            }
+            ui.label(
+                egui::RichText::new(format!("{} configured", options_state.pool_inputs.len()))
+                    .size(10.0)
+                    .color(Color32::from_rgb(130, 130, 130)),
+            );
+        });
+
+        if options_state.apply_pool_config {
+            if let Some(message) = options_state.pool_validation_message() {
+                ui.label(
+                    egui::RichText::new(format!("⚠ {}", message))
+                        .size(10.0)
+                        .color(Color32::from_rgb(255, 120, 120)),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("✓ Pool config looks valid")
+                        .size(10.0)
+                        .color(Color32::from_rgb(120, 200, 120)),
+                );
+            }
+        }
+    });
+
+    if let Some(data) = &miner.full_data {
+        let configured_pools = data
+            .pools
+            .iter()
+            .flat_map(|g| g.pools.iter().map(|p| (g.name.clone(), p)))
+            .collect::<Vec<_>>();
+
+        if !configured_pools.is_empty() {
+            ui.add_space(4.0);
+            ui.collapsing("Current Pool Preview", |ui| {
+                for (idx, (group_name, pool)) in configured_pools.iter().enumerate() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}. [{}] {} ({})",
+                            idx + 1,
+                            group_name,
+                            pool.url
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| "N/A".to_string()),
+                            pool.user.clone().unwrap_or_else(|| "N/A".to_string())
+                        ))
+                        .size(10.0)
+                        .color(Color32::from_rgb(160, 160, 160)),
+                    );
+                }
+            });
+        }
+    }
+
+    ui.horizontal(|ui| {
+        if ui.button("Use Global Defaults").clicked() {
+            options_state = global_options.clone();
+        }
+
+        if ui.button("Apply to This Miner").clicked() {
+            let ip = miner.ip.clone();
+            let settings = options_state.clone();
+            if !settings.has_any_enabled() {
+                eprintln!("✗ No option toggles are enabled for {}", ip);
+            } else {
+                crate::runtime::spawn(async move {
+                    match options::apply_options_to_miner(ip.clone(), settings).await {
+                        Ok(applied) => {
+                            println!("✓ Applied options to {} ({})", ip, applied.join(", "));
+                        }
+                        Err(err) => {
+                            eprintln!("✗ {}", err);
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    miner_option_overrides
+        .lock()
+        .unwrap()
+        .insert(miner.ip.clone(), options_state);
 }
 
 fn draw_control_buttons(
@@ -567,17 +1044,14 @@ fn draw_control_buttons(
             .clicked()
         {
             let ip = miner.ip.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let factory = MinerFactory::new();
-                    if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
-                        match miner.resume(None).await {
-                            Ok(_) => println!("✓ Started miner: {ip}"),
-                            Err(e) => eprintln!("✗ Failed to start {ip}: {e}"),
-                        }
+            crate::runtime::spawn(async move {
+                let factory = MinerFactory::new();
+                if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
+                    match miner.resume(None).await {
+                        Ok(_) => println!("✓ Started miner: {ip}"),
+                        Err(e) => eprintln!("✗ Failed to start {ip}: {e}"),
                     }
-                });
+                }
             });
         }
 
@@ -594,17 +1068,14 @@ fn draw_control_buttons(
             .clicked()
         {
             let ip = miner.ip.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let factory = MinerFactory::new();
-                    if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
-                        match miner.pause(None).await {
-                            Ok(_) => println!("✓ Stopped miner: {ip}"),
-                            Err(e) => eprintln!("✗ Failed to stop {ip}: {e}"),
-                        }
+            crate::runtime::spawn(async move {
+                let factory = MinerFactory::new();
+                if let Ok(Some(miner)) = factory.get_miner(ip.parse().unwrap()).await {
+                    match miner.pause(None).await {
+                        Ok(_) => println!("✓ Stopped miner: {ip}"),
+                        Err(e) => eprintln!("✗ Failed to stop {ip}: {e}"),
                     }
-                });
+                }
             });
         }
 
@@ -623,30 +1094,25 @@ fn draw_control_buttons(
             let ip = miner.ip.clone();
             let current_state = miner.light_flashing;
             let miners = Arc::clone(&miners_arc);
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    let factory = MinerFactory::new();
-                    if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
-                        let new_state = !current_state;
-                        match miner_obj.set_fault_light(new_state).await {
-                            Ok(_) => {
-                                println!(
-                                    "✓ Set fault light to {}: {ip}",
-                                    if new_state { "ON" } else { "OFF" }
-                                );
-                                // Refresh miner data immediately
-                                let data = miner_obj.get_data().await;
-                                let mut miners_list = miners.lock().unwrap();
-                                if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip)
-                                {
-                                    existing.full_data = Some(data);
-                                }
+            crate::runtime::spawn(async move {
+                let factory = MinerFactory::new();
+                if let Ok(Some(miner_obj)) = factory.get_miner(ip.parse().unwrap()).await {
+                    let new_state = !current_state;
+                    match miner_obj.set_fault_light(new_state).await {
+                        Ok(_) => {
+                            println!(
+                                "✓ Set fault light to {}: {ip}",
+                                if new_state { "ON" } else { "OFF" }
+                            );
+                            let data = miner_obj.get_data().await;
+                            let mut miners_list = miners.lock().unwrap();
+                            if let Some(existing) = miners_list.iter_mut().find(|m| m.ip == ip) {
+                                existing.full_data = Some(data);
                             }
-                            Err(e) => eprintln!("✗ Failed to set fault light on {ip}: {e}"),
                         }
+                        Err(e) => eprintln!("✗ Failed to set fault light on {ip}: {e}"),
                     }
-                });
+                }
             });
             // Force immediate refresh in UI
             detail_refresh_times.insert(miner.ip.clone(), Instant::now());
@@ -775,8 +1241,8 @@ fn draw_metrics_graphs(
     if let Some(history_data) = history {
         use egui_plot::{Legend, Line, Plot, PlotPoints};
 
-        // Request continuous repaints for smooth 60fps animation
-        ui.ctx().request_repaint();
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(200));
 
         ui.heading("Metrics Over Time");
         ui.separator();
@@ -786,7 +1252,7 @@ fn draw_metrics_graphs(
             use chrono::{Local, TimeZone};
 
             let num_boards = history_data
-                .first()
+                .front()
                 .map(|(_, _, _, boards, _, _)| boards.len())
                 .unwrap_or(0);
 
@@ -855,7 +1321,7 @@ fn draw_metrics_graphs(
                         }
                     });
 
-                if let Some(latest) = history_data.last() {
+                if let Some(latest) = history_data.back() {
                     ui.label(format!("Total: {:.2} TH/s", latest.1));
                 }
             });
@@ -924,7 +1390,7 @@ fn draw_metrics_graphs(
                         }
                     });
 
-                if let Some(latest) = history_data.last() {
+                if let Some(latest) = history_data.back() {
                     ui.label(format!("Average: {:.1} °C", latest.4));
                 }
             });
@@ -976,7 +1442,7 @@ fn draw_metrics_graphs(
                             );
                         });
 
-                    if let Some(latest) = history_data.last() {
+                    if let Some(latest) = history_data.back() {
                         let current_eff = if latest.1 > 0.0 {
                             latest.2 / latest.1
                         } else {
@@ -1021,16 +1487,20 @@ fn draw_metrics_graphs(
                         );
                     });
 
-                if let Some(latest) = history_data.last() {
+                if let Some(latest) = history_data.back() {
                     ui.label(format!("Current: {:.0} W", latest.2));
                 }
             });
 
             ui.add_space(5.0);
+            let span_secs = match (history_data.front(), history_data.back()) {
+                (Some(start), Some(end)) => (end.0 - start.0).max(0.0),
+                _ => 0.0,
+            };
             ui.label(format!(
-                "Data points: {} (last {}s)",
+                "Data points: {} (last {:.0}s)",
                 history_data.len(),
-                ((history_data.len() - 1) * 10)
+                span_secs
             ));
         } else {
             ui.label("Collecting data...");

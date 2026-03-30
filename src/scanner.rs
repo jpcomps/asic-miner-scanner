@@ -1,5 +1,9 @@
-use crate::models::{HashratePoint, MinerInfo, ScanProgress};
+use crate::models::{HashratePoint, MinerCapabilities, MinerInfo, ScanProgress};
 use asic_rs::MinerFactory;
+use asic_rs_core::data::hashrate::{HashRate, HashRateUnit};
+use asic_rs_core::data::miner::MinerData;
+use asic_rs_core::data::pool::PoolData;
+use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -69,6 +73,126 @@ pub fn calculate_total_ips(range: &str) -> usize {
     0
 }
 
+fn hashrate_to_terahash(hashrate: Option<&HashRate>) -> Option<f64> {
+    hashrate
+        .cloned()
+        .map(|value| value.as_unit(HashRateUnit::TeraHash).value)
+}
+
+fn average_fan_rpm(data: &MinerData) -> Option<f64> {
+    let rpms: Vec<f64> = data
+        .fans
+        .iter()
+        .filter_map(|fan| fan.rpm)
+        .map(|rpm| rpm.as_radians_per_second() * 60.0 / (2.0 * std::f64::consts::PI))
+        .collect();
+
+    if rpms.is_empty() {
+        None
+    } else {
+        Some(rpms.iter().sum::<f64>() / rpms.len() as f64)
+    }
+}
+
+fn primary_pool(data: &MinerData) -> Option<&PoolData> {
+    data.pools
+        .iter()
+        .flat_map(|group| group.pools.iter())
+        .find(|pool| pool.active.unwrap_or(false))
+        .or_else(|| {
+            data.pools
+                .iter()
+                .flat_map(|group| group.pools.iter())
+                .next()
+        })
+}
+
+fn count_active_boards(data: &MinerData) -> (usize, usize) {
+    let total = data.hashboards.len();
+    if total == 0 {
+        return (0, 0);
+    }
+
+    let active = data
+        .hashboards
+        .iter()
+        .filter(|board| {
+            board.active.unwrap_or(false)
+                || board
+                    .hashrate
+                    .as_ref()
+                    .map(|hr| hr.clone().as_unit(HashRateUnit::TeraHash).value > 0.01)
+                    .unwrap_or(false)
+                || board.working_chips.unwrap_or(0) > 0
+        })
+        .count();
+
+    (active, total)
+}
+
+fn build_miner_info(ip: String, data: MinerData, capabilities: MinerCapabilities) -> MinerInfo {
+    let hashrate = hashrate_to_terahash(data.hashrate.as_ref());
+    let wattage = data.wattage.map(|value| value.as_watts());
+    let efficiency = data.efficiency;
+    let temperature = data.average_temperature.map(|temp| temp.as_celsius());
+    let fan_rpm = average_fan_rpm(&data);
+    let selected_pool = primary_pool(&data);
+    let (active_boards, total_boards) = count_active_boards(&data);
+
+    MinerInfo {
+        ip,
+        hostname: data.hostname.clone().unwrap_or_else(|| "N/A".to_string()),
+        model: data.device_info.model.to_string(),
+        firmware_version: data
+            .firmware_version
+            .clone()
+            .unwrap_or_else(|| "N/A".to_string()),
+        control_board: data
+            .control_board_version
+            .as_ref()
+            .map(|cb| cb.name.clone())
+            .unwrap_or_else(|| "N/A".to_string()),
+        active_boards: if total_boards > 0 {
+            format!("{active_boards}/{total_boards}")
+        } else {
+            "N/A".to_string()
+        },
+        hashrate: hashrate
+            .map(|value| format!("{value:.2}"))
+            .unwrap_or_else(|| "N/A".to_string()),
+        wattage: wattage
+            .map(|value| format!("{value:.0} W"))
+            .unwrap_or_else(|| "N/A".to_string()),
+        efficiency: efficiency
+            .map(|efficiency| format!("{efficiency:.1}"))
+            .unwrap_or_else(|| "N/A".to_string()),
+        temperature: temperature
+            .map(|temp| format!("{temp:.1}°C"))
+            .unwrap_or_else(|| "N/A".to_string()),
+        fan_speed: fan_rpm
+            .map(|rpm| format!("{rpm:.0} RPM"))
+            .unwrap_or_else(|| "N/A".to_string()),
+        pool: selected_pool
+            .and_then(|pool| pool.url.as_ref())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "N/A".to_string()),
+        worker: selected_pool
+            .and_then(|pool| pool.user.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "N/A".to_string()),
+        light_flashing: data.light_flashing.unwrap_or(false),
+        full_data: Some(data),
+        hashrate_th: hashrate,
+        wattage_w: wattage,
+        efficiency_w_th: efficiency,
+        temperature_c: temperature,
+        fan_rpm,
+        active_boards_count: (total_boards > 0).then_some(active_boards),
+        total_boards_count: (total_boards > 0).then_some(total_boards),
+        capabilities,
+    }
+}
+
 pub fn scan_ranges(
     ranges: Vec<String>,
     miners: Arc<Mutex<Vec<MinerInfo>>>,
@@ -108,170 +232,69 @@ pub fn scan_ranges(
                 }
             }
 
-            // Enable adaptive concurrency and scan all ranges at once
             factory.update_adaptive_concurrency();
 
-            match factory.scan().await {
-                Ok(discovered_miners) => {
-                    for miner in discovered_miners {
-                        let ip = miner.get_ip().to_string();
+            let mut discovered_miners = Vec::new();
+            let mut scan_stream = factory.scan_stream_with_ip();
 
-                        {
-                            let mut progress = scan_progress.lock().unwrap();
-                            progress.current_ip = ip.clone();
-                        }
+            while let Some((ip, miner_opt)) = scan_stream.next().await {
+                let mut progress = scan_progress.lock().unwrap();
+                progress.current_ip = ip.to_string();
+                progress.scanned_ips = (progress.scanned_ips + 1).min(progress.total_ips);
 
-                        let data = miner.get_data().await;
-
-                        // Extract hashrate value for efficiency calculation
-                        let hashrate_th = data.hashrate.as_ref().map(|hr| {
-                            hr.clone()
-                                .as_unit(asic_rs::data::hashrate::HashRateUnit::TeraHash)
-                        });
-
-                        // Extract wattage (power) and efficiency
-                        let wattage_str = if let Some(wattage) = data.wattage {
-                            format!("{:.0} W", wattage.as_watts())
-                        } else {
-                            "N/A".to_string()
-                        };
-
-                        let efficiency_str = if let Some(efficiency) = data.efficiency {
-                            format!("{efficiency:.1}")
-                        } else {
-                            "N/A".to_string()
-                        };
-
-                        let miner_info = MinerInfo {
-                            ip: ip.clone(),
-                            hostname: data.hostname.clone().unwrap_or_else(|| "N/A".to_string()),
-                            model: data.device_info.model.to_string(),
-                            firmware_version: data
-                                .firmware_version
-                                .clone()
-                                .unwrap_or_else(|| "N/A".to_string()),
-                            control_board: data
-                                .control_board_version
-                                .as_ref()
-                                .map(|cb| format!("{cb:?}"))
-                                .unwrap_or_else(|| "N/A".to_string()),
-                            hashrate: match hashrate_th {
-                                Some(hr) => {
-                                    let value_str = format!("{hr}");
-                                    if let Some(val) = value_str.split_whitespace().next() {
-                                        if let Ok(num) = val.parse::<f64>() {
-                                            format!("{:.2}", num)
-                                        } else {
-                                            value_str
-                                        }
-                                    } else {
-                                        value_str
-                                    }
-                                }
-                                None => "N/A".to_string(),
-                            },
-                            wattage: wattage_str,
-                            efficiency: efficiency_str,
-                            temperature: {
-                                if let Some(temp) = data.average_temperature {
-                                    format!("{:.1}°C", temp.as_celsius())
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            fan_speed: {
-                                if !data.fans.is_empty() {
-                                    let rpms: Vec<f64> = data
-                                        .fans
-                                        .iter()
-                                        .filter_map(|fan| fan.rpm)
-                                        .map(|rpm| {
-                                            rpm.as_radians_per_second() * 60.0
-                                                / (2.0 * std::f64::consts::PI)
-                                        })
-                                        .collect();
-
-                                    if !rpms.is_empty() {
-                                        let avg_rpm = rpms.iter().sum::<f64>() / rpms.len() as f64;
-                                        format!("{avg_rpm:.0} RPM")
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            pool: {
-                                if !data.pools.is_empty() {
-                                    if let Some(url) = &data.pools[0].url {
-                                        url.to_string()
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            worker: {
-                                if !data.pools.is_empty() {
-                                    if let Some(user) = &data.pools[0].user {
-                                        user.to_string()
-                                    } else {
-                                        "N/A".to_string()
-                                    }
-                                } else {
-                                    "N/A".to_string()
-                                }
-                            },
-                            light_flashing: data.light_flashing.unwrap_or(false),
-                            full_data: Some(data.clone()),
-                        };
-
-                        // Record hashrate history (thread-safe)
-                        {
-                            if let Some(hashrate_val) =
-                                miner_info.hashrate.split_whitespace().next()
-                            {
-                                if let Ok(hashrate) = hashrate_val.parse::<f64>() {
-                                    let timestamp = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs_f64();
-
-                                    let mut history_map = hashrate_history.lock().unwrap();
-                                    let history =
-                                        history_map.entry(miner_info.ip.clone()).or_default();
-                                    history.push(HashratePoint {
-                                        timestamp,
-                                        hashrate,
-                                    });
-
-                                    // Keep only last MAX_HISTORY_POINTS
-                                    if history.len() > crate::models::MAX_HISTORY_POINTS {
-                                        history.drain(
-                                            0..history.len() - crate::models::MAX_HISTORY_POINTS,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        // Use IP as key to deduplicate (thread-safe)
-                        {
-                            let mut miners_map = new_miners.lock().unwrap();
-                            miners_map.insert(miner_info.ip.clone(), miner_info);
-
-                            // Update progress with current count
-                            let mut progress = scan_progress.lock().unwrap();
-                            progress.found_miners = miners_map.len();
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Scan error: {e:?}");
+                if let Some(miner) = miner_opt {
+                    discovered_miners.push(miner);
+                    progress.found_miners = discovered_miners.len();
                 }
             }
 
+            let data_fetch_concurrency = discovered_miners.len().clamp(1, 64);
+            let miner_infos: Vec<MinerInfo> = stream::iter(discovered_miners.into_iter())
+                .map(|miner| async move {
+                    let capabilities = MinerCapabilities {
+                        set_power_limit: miner.supports_set_power_limit(),
+                        fan_config: miner.supports_fan_config(),
+                        tuning_config: miner.supports_tuning_config(),
+                        scaling_config: miner.supports_scaling_config(),
+                        pools_config: miner.supports_pools_config(),
+                    };
+                    let ip = miner.get_ip().to_string();
+                    let data = miner.get_data().await;
+                    build_miner_info(ip, data, capabilities)
+                })
+                .buffer_unordered(data_fetch_concurrency)
+                .collect()
+                .await;
+
+            {
+                let mut miners_map = new_miners.lock().unwrap();
+
+                for miner_info in miner_infos {
+                    if let Some(hashrate) = miner_info.hashrate_th {
+                        let timestamp = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64();
+
+                        let mut history_map = hashrate_history.lock().unwrap();
+                        let history = history_map.entry(miner_info.ip.clone()).or_default();
+                        history.push(HashratePoint {
+                            timestamp,
+                            hashrate,
+                        });
+
+                        if history.len() > crate::models::MAX_HISTORY_POINTS {
+                            history.drain(0..history.len() - crate::models::MAX_HISTORY_POINTS);
+                        }
+                    }
+
+                    miners_map.insert(miner_info.ip.clone(), miner_info);
+                }
+
+                let mut progress = scan_progress.lock().unwrap();
+                progress.found_miners = miners_map.len();
+                progress.scanned_ips = progress.total_ips;
+            }
             // Mark all ranges as scanned
             {
                 let mut progress = scan_progress.lock().unwrap();
