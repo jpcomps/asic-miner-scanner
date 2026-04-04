@@ -10,7 +10,7 @@ egui_extras = { version = "0.33", features = ["default", "image"] }
 resvg = "0.45"
 usvg = "0.47"
 tiny-skia = "0.12"
-egui_plot = "0.34"
+egui_plot = "0.35"
 asic-rs = { git = "https://github.com/256-Foundation/asic-rs" }
 asic-rs-core = { git = "https://github.com/256-Foundation/asic-rs" }
 futures = "0.3"
