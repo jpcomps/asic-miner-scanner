@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eframe = "0.33"
+eframe = "0.34"
 egui = "0.33"
 egui_extras = { version = "0.33", features = ["default", "image"] }
 resvg = "0.45"
