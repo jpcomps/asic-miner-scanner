@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 eframe = "0.33"
 egui = "0.33"
-egui_extras = { version = "0.33", features = ["default", "image"] }
+egui_extras = { version = "0.34", features = ["default", "image"] }
 resvg = "0.45"
 usvg = "0.47"
 tiny-skia = "0.12"
